@@ -1,0 +1,19 @@
+# Whitelist: solo entran los archivos del puente H listados abajo.
+/*
+!/.gitignore
+!/MotorFullBridge_ESP32/
+/MotorFullBridge_ESP32/*
+!/MotorFullBridge_ESP32/MotorFullBridge_ESP32.ino
+!/MotorFullBridge/
+/MotorFullBridge/*
+!/MotorFullBridge/MotorFullBridge.ino
+!/banco_vivo.py
+!/banco_vivo.html
+!/motor_ui.html
+!/puente_serie.py
+!/_alimentacion.html
+!/README.md
+!/LICENSE
+!/docs/
+# nunca: credenciales del WiFi de casa
+wifi_casa.h

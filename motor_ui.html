@@ -1,0 +1,1231 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Puente H · ESP32-S3</title>
+<style>
+  :root{--bg:#0e1116;--pan:#171c24;--bd:#2a323d;--fg:#e6edf3;--mut:#8b949e;
+        --acc:#4cc2ff;--ok:#3fb950;--warn:#d29922;--bad:#f85149;
+        --ha:#ff6b6b;--la:#ffb86b;--hb:#6bd3ff;--lb:#9d8bff;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:Segoe UI,system-ui,sans-serif;background:var(--bg);color:var(--fg)}
+  header{display:flex;align-items:center;gap:14px;padding:12px 18px;background:var(--pan);border-bottom:1px solid var(--bd)}
+  header h1{font-size:17px;margin:0;font-weight:600}
+  #conn{margin-left:auto;font-size:13px;padding:4px 10px;border-radius:20px;border:1px solid var(--bd)}
+  .grid{display:grid;grid-template-columns:340px 1fr;gap:14px;padding:14px;max-width:1180px;margin:0 auto}
+  .card{background:var(--pan);border:1px solid var(--bd);border-radius:10px;padding:14px}
+  .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.5px;color:var(--mut);margin:0 0 12px}
+  .row{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+  button{background:#202833;color:var(--fg);border:1px solid var(--bd);border-radius:8px;padding:9px 12px;
+         font-size:14px;cursor:pointer;flex:1;transition:.1s}
+  button:hover{border-color:var(--acc)}
+  button.active{background:var(--acc);color:#04121c;border-color:var(--acc);font-weight:600}
+  button.stop{background:#3a2030;border-color:#5a2a3a}
+  button.stop:hover{border-color:var(--bad)}
+  label{font-size:13px;color:var(--mut);display:block;margin:14px 0 4px}
+  input[type=range]{width:100%;accent-color:var(--acc)}
+  .val{font-variant-numeric:tabular-nums;color:var(--acc);font-weight:600}
+  .stat{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:14px;font-variant-numeric:tabular-nums}
+  .stat b{color:var(--mut);font-weight:500}
+  canvas{width:100%;display:block;background:#0b0e13;border-radius:8px;border:1px solid var(--bd)}
+  #log{height:150px;overflow:auto;background:#0b0e13;border:1px solid var(--bd);border-radius:8px;
+       padding:8px;font-family:Consolas,monospace;font-size:12.5px;white-space:pre-wrap;color:#b9c4d0}
+  .leg{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;margin-top:8px;color:var(--mut)}
+  .leg i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  td,th{text-align:left;padding:5px 6px;border-bottom:1px solid var(--bd)}
+  th{color:var(--mut);font-weight:500}
+  code{background:#0b0e13;padding:1px 6px;border-radius:5px;color:var(--acc)}
+  .pill{font-size:12px;padding:2px 8px;border-radius:20px;border:1px solid var(--bd);color:var(--mut)}
+</style>
+</head>
+<body>
+<header>
+  <h1>⚙️ Puente H · ESP32-S3 (MCPWM con dead-time por hardware)</h1>
+  <span id="conn">conectando…</span>
+  <input id="espUrl" value="http://192.168.4.1" onchange="setEsp(this.value)" title="direccion del ESP32" style="margin-left:10px;background:#0b0e13;color:#7ce8ff;border:1px solid #30363d;border-radius:5px;padding:5px 8px;font:12px ui-monospace,Consolas,monospace;width:170px">
+</header>
+
+<div class="grid">
+  <!-- ============ CONTROLES ============ -->
+  <div class="card">
+    <h2>Control</h2>
+
+    <label>Modulación</label>
+    <div class="row">
+      <button id="mUNI" onclick="setMode(0)">Unipolar</button>
+      <button id="mBIP" onclick="setMode(1)">Bipolar</button>
+    </div>
+
+    <label>Sentido</label>
+    <div class="row">
+      <button id="dF" onclick="setDir('F')">◀ Adelante</button>
+      <button id="dR" onclick="setDir('R')">Atrás ▶</button>
+    </div>
+
+    <label>Velocidad: <span class="val" id="spLbl">0.0 %</span></label>
+    <input type="range" id="sp" min="0" max="1000" value="0" oninput="onSpeed(this.value)">
+
+    <label>Dead-time: <span class="val" id="dtLbl">500 ns</span></label>
+    <input type="range" id="dt" min="0" max="1500" step="14" value="500" oninput="onDead(this.value)">
+
+    <div class="row" style="margin-top:14px">
+      <button class="stop" onclick="cmd('S')">STOP (coast)</button>
+      <button class="stop" onclick="cmd('B')">FRENO</button>
+    </div>
+    <div class="row">
+      <button onclick="cmd('E')">Enable</button>
+      <button onclick="cmd('X')">Disable</button>
+    </div>
+  </div>
+
+  <!-- ============ VISUAL ============ -->
+  <div>
+    <div class="card" style="margin-bottom:14px">
+      <h2>Estado</h2>
+      <div class="stat">
+        <b>Salidas</b><span id="sEn">—</span>
+        <b>Modo</b><span id="sMode">—</span>
+        <b>Sentido</b><span id="sDir">—</span>
+        <b>Velocidad</b><span id="sSpeed">—</span>
+        <b>Dead-time</b><span id="sDead">—</span>
+        <b>PWM</b><span id="sPwm">—</span>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:14px">
+      <h2>Señales en los pines (lo que ve el analizador lógico)</h2>
+      <canvas id="cPwm" width="760" height="260"></canvas>
+      <div class="leg">
+        <span><i style="background:var(--ha)"></i>GPIO 4 · HA (high-side A)</span>
+        <span><i style="background:var(--la)"></i>GPIO 5 · LA (low-side A)</span>
+        <span><i style="background:var(--hb)"></i>GPIO 6 · HB (high-side B)</span>
+        <span><i style="background:var(--lb)"></i>GPIO 7 · LB (low-side B)</span>
+        <span class="pill">2 períodos · zona gris = dead-time</span>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:14px">
+      <h2>Velocidad en el tiempo</h2>
+      <canvas id="cHist" width="760" height="150"></canvas>
+    </div>
+
+    <div class="card" style="margin-bottom:14px">
+      <h2>Terminal (mismo COM por RTT)</h2>
+      <div id="log"></div>
+    </div>
+
+    <div class="card">
+      <h2>Conexión del analizador lógico</h2>
+      <table>
+        <tr><th>Canal</th><th>Pin ESP32</th><th>Señal</th></tr>
+        <tr><td>CH0</td><td><code>GPIO 4</code></td><td>HA · gate high-side rama A (P-MOS, activo bajo)</td></tr>
+        <tr><td>CH1</td><td><code>GPIO 5</code></td><td>LA · gate low-side rama A (N-MOS, activo alto)</td></tr>
+        <tr><td>CH2</td><td><code>GPIO 6</code></td><td>HB · gate high-side rama B</td></tr>
+        <tr><td>CH3</td><td><code>GPIO 7</code></td><td>LB · gate low-side rama B</td></tr>
+        <tr><td>GND</td><td><code>GND</code></td><td>masa común (¡imprescindible!)</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <h2>Cómo se controla</h2>
+      <p style="font-size:13px;color:var(--mut);margin:0 0 12px">
+        El ESP32 levanta <b style="color:#c9d1d9">su propia red WiFi</b>. No hace falta router ni
+        internet: te conectás con el celular y entrás a la página. Es a propósito — un puente de
+        motor no debería depender de una red ajena para poder parar.
+      </p>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;margin-bottom:14px">
+        <div style="background:#161b22;border:1px solid #30363d;border-left:3px solid #4cc2ff;padding:10px 12px;border-radius:4px">
+          <div style="font:bold 11px 'Archivo Narrow',sans-serif;letter-spacing:.1em;color:#4cc2ff;text-transform:uppercase;margin-bottom:6px">Desde el celular</div>
+          <div style="font-size:12.5px;color:#8b949e;line-height:1.7">
+            red <code>PuenteH</code><br>clave <code>cambiame-1234</code> (o la que hayas puesto en AP_CLAVE)<br>
+            abrís <code>http://192.168.4.1</code>
+          </div>
+        </div>
+        <div style="background:#161b22;border:1px solid #30363d;border-left:3px solid #d29922;padding:10px 12px;border-radius:4px">
+          <div style="font:bold 11px 'Archivo Narrow',sans-serif;letter-spacing:.1em;color:#d29922;text-transform:uppercase;margin-bottom:6px">Desde la PC</div>
+          <div style="font-size:12.5px;color:#8b949e;line-height:1.7">
+            puerto serie a <b style="color:#c9d1d9">115200</b><br>
+            <code>v 30</code> · <code>a</code> · <code>r</code> · <code>f</code> · <code>s</code> · <code>d 500</code> · <code>?</code>
+          </div>
+        </div>
+        <div style="background:#161b22;border:1px solid #30363d;border-left:3px solid #3fb950;padding:10px 12px;border-radius:4px">
+          <div style="font:bold 11px 'Archivo Narrow',sans-serif;letter-spacing:.1em;color:#3fb950;text-transform:uppercase;margin-bottom:6px">Hombre muerto</div>
+          <div style="font-size:12.5px;color:#8b949e;line-height:1.7">
+            Si el navegador deja de responder por <b style="color:#c9d1d9">4&nbsp;s</b> con el motor
+            girando, el puente pasa solo a <b style="color:#c9d1d9">LIBRE</b>.
+          </div>
+        </div>
+      </div>
+
+      <table>
+        <tr><th>Comando</th><th>Qué hace</th><th>Estado de los 4 pines</th></tr>
+        <tr><td><code>a</code> · ADELANTE</td><td>rama A conmuta con el duty, rama B fija abajo</td><td>A = PWM · B = <code>(0,0)</code></td></tr>
+        <tr><td><code>r</code> · ATRÁS</td><td>al revés: conmuta B, A fija abajo</td><td>B = PWM · A = <code>(0,0)</code></td></tr>
+        <tr><td><code>f</code> · FRENO</td><td>los dos N prendidos: el motor queda en corto y frena duro</td><td><code>(0,0)</code> y <code>(0,0)</code></td></tr>
+        <tr><td><code>s</code> · LIBRE</td><td>los cuatro MOSFET cortados: el motor gira por inercia</td><td><code>(0,1)</code> y <code>(0,1)</code></td></tr>
+        <tr><td><code>d &lt;ns&gt;</code></td><td>dead-time, en pasos de 100&nbsp;ns (máx. 5&nbsp;µs)</td><td>—</td></tr>
+      </table>
+
+      <p style="font-size:12.5px;color:#8b949e;margin:14px 0 0;padding:10px 12px;background:rgba(255,123,114,.08);border-left:3px solid #ff7b72">
+        <b style="color:#ff7b72">Al arrancar queda en LIBRE con velocidad 0.</b> Nunca se despierta moviendo
+        el motor, ni después de un corte de luz ni después de reprogramarlo. Si al enchufar el motor se
+        mueve, algo está mal cableado: cortá y revisá antes de seguir.
+      </p>
+    </div>
+
+
+    <div class="card">
+      <h2>Alimentación: ¿cuántas fuentes necesito?</h2>
+      <p style="font-size:13px;color:var(--mut);margin:0 0 10px">
+        La pregunta corta: <b style="color:#3fb950">si tu motor es de 12&nbsp;V, UNA sola fuente</b>.
+        Los dos rieles del esquemático (<span style="color:#ff9b6b">+Vmot</span> y
+        <span style="color:#d29922">+12&nbsp;V</span>) son "dos" porque pueden ser distintos,
+        no porque tengan que serlo. Si coinciden, se unen y listo. El ESP32 se alimenta aparte
+        por el USB — pero su masa <b>tiene que estar unida</b> a la del puente.
+      </p>
+
+      <svg viewBox="0 0 760 400" style="width:100%;background:#0b0e13;border:1px solid #30363d;border-radius:8px">
+        <defs>
+          <marker id="fl" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+            <path d="M0,0 L7,3 L0,6 z" fill="#8b949e"/>
+          </marker>
+        </defs>
+        <style>
+          .t   { font: 11px ui-monospace, Consolas, monospace; fill:#c9d1d9 }
+          .lbl { font: bold 11px 'Archivo Narrow', sans-serif; fill:#8b949e; letter-spacing:.08em }
+          .ttl { font: bold 13px 'Archivo Narrow', sans-serif; fill:#e6edf3; letter-spacing:.1em }
+          .pos { stroke:#ff7b72; stroke-width:2.5; fill:none }
+          .gnd { stroke:#8b949e; stroke-width:2.5; fill:none }
+          .gat { stroke:#d29922; stroke-width:2.5; fill:none }
+          .caja{ fill:#161b22; stroke:#30363d; stroke-width:1.5 }
+          .nota{ font: 10.5px 'Archivo', sans-serif; fill:#8b949e }
+        </style>
+
+        <!-- ══ CASO A: motor de 12 V ══════════════════════════════ -->
+        <text class="ttl" x="20" y="26">CASO A · MOTOR DE 12 V  →  UNA SOLA FUENTE</text>
+        <text class="nota" x="20" y="44">Es el caso normal para probar en el banco.</text>
+
+        <!-- fuente -->
+        <rect class="caja" x="20" y="60" width="120" height="66" rx="4"/>
+        <text class="lbl" x="34" y="82">FUENTE ÚNICA</text>
+        <text class="t"   x="34" y="100" style="fill:#e6edf3">12 V  ·  3 A</text>
+        <text class="t"   x="34" y="117" style="fill:#ff7b72">+</text>
+        <text class="t"   x="52" y="117" style="fill:#8b949e">−</text>
+
+        <!-- riel + -->
+        <path class="pos" d="M140,92 L250,92"/>
+        <circle cx="250" cy="92" r="3.5" fill="#ff7b72"/>
+        <!-- bifurcacion -->
+        <path class="pos" d="M250,92 L250,72 L400,72" marker-end="url(#fl)"/>
+        <path class="gat" d="M250,92 L250,122 L400,122" marker-end="url(#fl)"/>
+        <text class="t" x="408" y="76"  style="fill:#ff9b6b">+Vmot → source de los P (arriba)</text>
+        <text class="t" x="408" y="126" style="fill:#d29922">riel de gates → los 2k2 del lado N</text>
+
+        <!-- riel gnd -->
+        <path class="gnd" d="M140,114 L250,114 L250,170 L680,170"/>
+        <text class="lbl" x="300" y="163">MASA COMÚN — OBLIGATORIA</text>
+
+        <!-- stm32 -->
+        <rect class="caja" x="20" y="196" width="120" height="60" rx="4"/>
+        <text class="lbl" x="34" y="216">ESP32-S3 · USB</text>
+        <text class="t"   x="34" y="234" style="fill:#7ce8ff">USB de la PC</text>
+        <text class="t"   x="34" y="249" style="fill:#8b949e">GND</text>
+        <path class="gnd" d="M140,246 L200,246 L200,170"/>
+        <circle cx="200" cy="170" r="3.5" fill="#8b949e"/>
+
+        <text class="nota" x="230" y="212">El ESP32 NO alimenta el puente: solo manda las 4 señales</text>
+        <text class="nota" x="230" y="228">de 3,3 V a los 2N2222. La potencia sale toda de la fuente.</text>
+        <text class="nota" x="230" y="252" style="fill:#ff7b72">Si las masas no se unen, los 2N2222 no tienen referencia</text>
+        <text class="nota" x="230" y="268" style="fill:#ff7b72">y el puente no responde. Es el error más común.</text>
+
+        <!-- separador -->
+        <line x1="20" y1="292" x2="740" y2="292" stroke="#30363d" stroke-width="1"/>
+
+        <!-- ══ CASO B: motor distinto ═════════════════════════════ -->
+        <text class="ttl" x="20" y="318">CASO B · MOTOR QUE NO ES DE 12 V  →  DOS FUENTES</text>
+
+        <rect class="caja" x="20" y="332" width="104" height="46" rx="4"/>
+        <text class="lbl" x="32" y="350">FUENTE MOTOR</text>
+        <text class="t"   x="32" y="368" style="fill:#ff9b6b">Vmot ≤ 20 V</text>
+
+        <rect class="caja" x="150" y="332" width="104" height="46" rx="4"/>
+        <text class="lbl" x="162" y="350">FUENTE GATES</text>
+        <text class="t"   x="162" y="368" style="fill:#d29922">12 V · 100 mA</text>
+
+        <path class="gnd" d="M124,372 L138,372 L138,388 L470,388"/>
+        <path class="gnd" d="M254,372 L268,372 L268,388"/>
+        <text class="lbl" x="290" y="382">LAS DOS MASAS UNIDAS ENTRE SÍ Y CON EL ESP32</text>
+
+        <text class="nota" x="480" y="344" style="fill:#ff7b72">El límite de 20 V no es un consejo:</text>
+        <text class="nota" x="480" y="359">al encender el P, su Vgs queda en −Vmot,</text>
+        <text class="nota" x="480" y="374">y el IRF9530N aguanta ±20 V de Vgs.</text>
+      </svg>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:12px">
+        <div style="background:#161b22;border:1px solid #30363d;border-left:3px solid #3fb950;padding:10px 12px;border-radius:4px">
+          <div style="font:bold 11px 'Archivo Narrow',sans-serif;letter-spacing:.1em;color:#3fb950;text-transform:uppercase;margin-bottom:5px">Para arrancar hoy</div>
+          <div style="font-size:12.5px;color:#8b949e">Una fuente de <b style="color:#c9d1d9">12&nbsp;V</b> y un motor de 12&nbsp;V.
+            Unís <span style="color:#ff9b6b">+Vmot</span> y <span style="color:#d29922">riel de gates</span> al mismo positivo.</div>
+        </div>
+        <div style="background:#161b22;border:1px solid #30363d;border-left:3px solid #d29922;padding:10px 12px;border-radius:4px">
+          <div style="font:bold 11px 'Archivo Narrow',sans-serif;letter-spacing:.1em;color:#d29922;text-transform:uppercase;margin-bottom:5px">Cuánta corriente</div>
+          <div style="font-size:12.5px;color:#8b949e">La del motor más un pelo. Los gates consumen
+            <b style="color:#c9d1d9">casi nada</b>: son 4 resistencias de 2k2, unos 20&nbsp;mA en total.</div>
+        </div>
+        <div style="background:#161b22;border:1px solid #30363d;border-left:3px solid #ff7b72;padding:10px 12px;border-radius:4px">
+          <div style="font:bold 11px 'Archivo Narrow',sans-serif;letter-spacing:.1em;color:#ff7b72;text-transform:uppercase;margin-bottom:5px">Lo que no se negocia</div>
+          <div style="font-size:12.5px;color:#8b949e">Masa común entre fuente, puente y ESP32, y
+            <b style="color:#c9d1d9">Vmot ≤ 20&nbsp;V</b>. Sin lo primero no anda; sin lo segundo se quema el P.</div>
+        </div>
+      </div>
+
+      <p style="font-size:12.5px;color:#8b949e;margin:14px 0 0;padding:10px 12px;background:rgba(210,153,34,.08);border-left:3px solid #d29922">
+        <b style="color:#d29922">Primer encendido, en este orden:</b> sin motor conectado y con la fuente
+        en <b style="color:#c9d1d9">5–6&nbsp;V</b>. Verificás en el osciloscopio las señales de gate y el
+        dead-time. Recién cuando eso está bien, subís a 12&nbsp;V y conectás el motor.
+      </p>
+
+
+      <h2>Esquemático sugerido (componentes de ByP Electrónica)</h2>
+      <p style="font-size:13px;color:var(--mut);margin:0 0 10px">
+        Puente H discreto con <b>IRF9530N (P)</b> arriba e <b>IRFZ44N (N)</b> abajo. Como no
+        son logic-level, cada gate se maneja con un <b>2N2222</b> que traslada los 3.3&nbsp;V del
+        ESP32. <b>Hay dos rails distintos:</b> <span style="color:#ff9b6b">+Vmot</span> (lo que sea
+        tu motor) alimenta el puente, y <span style="color:#d29922">+12&nbsp;V</span> (fuente aparte)
+        alimenta los gates del lado N. El lado P se cierra contra +Vmot. (ByP no tiene el driver
+        IR2104, así que va discreto.)
+      </p>
+
+      <svg viewBox="0 0 760 540" style="width:100%;background:#0b0e13;border:1px solid var(--bd);border-radius:8px" font-family="Consolas,monospace">
+        <!-- rails -->
+        <line x1="150" y1="46" x2="610" y2="46" stroke="#ff6b6b" stroke-width="2"/>
+        <text x="6" y="42" fill="#ff9b6b" font-size="13">+Vmot</text>
+        <text x="6" y="58" fill="#8b949e" font-size="11">(motor)</text>
+        <line x1="150" y1="494" x2="610" y2="494" stroke="#9fb0c0" stroke-width="2"/>
+        <text x="6" y="498" fill="#9fb0c0" font-size="13">GND</text>
+
+        <!-- conexiones verticales a rails -->
+        <line x1="250" y1="46" x2="250" y2="92"  stroke="#9fb0c0" stroke-width="2"/>
+        <line x1="510" y1="46" x2="510" y2="92"  stroke="#9fb0c0" stroke-width="2"/>
+        <line x1="250" y1="446" x2="250" y2="494" stroke="#9fb0c0" stroke-width="2"/>
+        <line x1="510" y1="446" x2="510" y2="494" stroke="#9fb0c0" stroke-width="2"/>
+
+        <!-- columnas OUT_A / OUT_B -->
+        <line x1="250" y1="166" x2="250" y2="372" stroke="#9fb0c0" stroke-width="2"/>
+        <line x1="510" y1="166" x2="510" y2="372" stroke="#9fb0c0" stroke-width="2"/>
+
+        <!-- ===== MOSFETs (rect + body-diode + terminales) ===== -->
+        <!-- Leg A HIGH (P) -->
+        <rect x="202" y="92" width="96" height="74" rx="6" fill="#141a22" stroke="#ff9b6b" stroke-width="1.5"/>
+        <text x="250" y="120" text-anchor="middle" fill="#e6edf3" font-size="13">IRF9530N</text>
+        <text x="250" y="138" text-anchor="middle" fill="#ff9b6b" font-size="12">P · HA</text>
+        <text x="263" y="106" fill="#8b949e" font-size="10">S</text>
+        <text x="263" y="162" fill="#8b949e" font-size="10">D</text>
+        <path d="M291,158 l8,0 l-4,-7 z" fill="none" stroke="#7ee0a0" stroke-width="1.4"/>
+        <line x1="291" y1="100" x2="299" y2="100" stroke="#7ee0a0" stroke-width="1.4"/>
+        <!-- Leg A LOW (N) -->
+        <rect x="202" y="372" width="96" height="74" rx="6" fill="#141a22" stroke="#6bd3ff" stroke-width="1.5"/>
+        <text x="250" y="400" text-anchor="middle" fill="#e6edf3" font-size="13">IRFZ44N</text>
+        <text x="250" y="418" text-anchor="middle" fill="#6bd3ff" font-size="12">N · LA</text>
+        <text x="263" y="386" fill="#8b949e" font-size="10">D</text>
+        <text x="263" y="442" fill="#8b949e" font-size="10">S</text>
+        <path d="M291,438 l8,0 l-4,-7 z" fill="none" stroke="#7ee0a0" stroke-width="1.4"/>
+        <line x1="291" y1="380" x2="299" y2="380" stroke="#7ee0a0" stroke-width="1.4"/>
+        <!-- Leg B HIGH (P) -->
+        <rect x="462" y="92" width="96" height="74" rx="6" fill="#141a22" stroke="#ff9b6b" stroke-width="1.5"/>
+        <text x="510" y="120" text-anchor="middle" fill="#e6edf3" font-size="13">IRF9530N</text>
+        <text x="510" y="138" text-anchor="middle" fill="#ff9b6b" font-size="12">P · HB</text>
+        <text x="523" y="106" fill="#8b949e" font-size="10">S</text>
+        <text x="523" y="162" fill="#8b949e" font-size="10">D</text>
+        <!-- Leg B LOW (N) -->
+        <rect x="462" y="372" width="96" height="74" rx="6" fill="#141a22" stroke="#6bd3ff" stroke-width="1.5"/>
+        <text x="510" y="400" text-anchor="middle" fill="#e6edf3" font-size="13">IRFZ44N</text>
+        <text x="510" y="418" text-anchor="middle" fill="#6bd3ff" font-size="12">N · LB</text>
+        <text x="523" y="386" fill="#8b949e" font-size="10">D</text>
+        <text x="523" y="442" fill="#8b949e" font-size="10">S</text>
+
+        <!-- ===== motor ===== -->
+        <line x1="250" y1="270" x2="350" y2="270" stroke="#9fb0c0" stroke-width="2"/>
+        <line x1="410" y1="270" x2="510" y2="270" stroke="#9fb0c0" stroke-width="2"/>
+        <circle cx="380" cy="270" r="30" fill="#141a22" stroke="#e6edf3" stroke-width="2"/>
+        <text x="380" y="276" text-anchor="middle" fill="#e6edf3" font-size="18">M</text>
+        <text x="250" y="258" text-anchor="middle" fill="#cdd6e0" font-size="11">OUT_A</text>
+        <text x="510" y="258" text-anchor="middle" fill="#cdd6e0" font-size="11">OUT_B</text>
+        <circle cx="250" cy="270" r="3.5" fill="#9fb0c0"/>
+        <circle cx="510" cy="270" r="3.5" fill="#9fb0c0"/>
+
+        <!-- ===== drivers de gate (2N2222) + pines ===== -->
+        <!-- HA (izq) -->
+        <line x1="202" y1="129" x2="170" y2="129" stroke="#9fb0c0" stroke-width="1.5"/>
+        <rect x="118" y="113" width="52" height="32" rx="5" fill="#141a22" stroke="#d29922" stroke-width="1.3"/>
+        <text x="144" y="133" text-anchor="middle" fill="#d29922" font-size="11">2N2222</text>
+        <line x1="118" y1="129" x2="92" y2="129" stroke="#9fb0c0" stroke-width="1.5"/>
+        <text x="86" y="133" text-anchor="end" fill="#4cc2ff" font-size="12">GPIO 4</text>
+        <!-- LA (izq) -->
+        <line x1="202" y1="409" x2="170" y2="409" stroke="#9fb0c0" stroke-width="1.5"/>
+        <rect x="118" y="393" width="52" height="32" rx="5" fill="#141a22" stroke="#d29922" stroke-width="1.3"/>
+        <text x="144" y="413" text-anchor="middle" fill="#d29922" font-size="11">2N2222</text>
+        <line x1="118" y1="409" x2="92" y2="409" stroke="#9fb0c0" stroke-width="1.5"/>
+        <text x="86" y="413" text-anchor="end" fill="#4cc2ff" font-size="12">GPIO 5</text>
+        <!-- HB (der) -->
+        <line x1="558" y1="129" x2="590" y2="129" stroke="#9fb0c0" stroke-width="1.5"/>
+        <rect x="590" y="113" width="52" height="32" rx="5" fill="#141a22" stroke="#d29922" stroke-width="1.3"/>
+        <text x="616" y="133" text-anchor="middle" fill="#d29922" font-size="11">2N2222</text>
+        <line x1="642" y1="129" x2="668" y2="129" stroke="#9fb0c0" stroke-width="1.5"/>
+        <text x="674" y="133" fill="#4cc2ff" font-size="12">GPIO 6</text>
+        <!-- LB (der) -->
+        <line x1="558" y1="409" x2="590" y2="409" stroke="#9fb0c0" stroke-width="1.5"/>
+        <rect x="590" y="393" width="52" height="32" rx="5" fill="#141a22" stroke="#d29922" stroke-width="1.3"/>
+        <text x="616" y="413" text-anchor="middle" fill="#d29922" font-size="11">2N2222</text>
+        <line x1="642" y1="409" x2="668" y2="409" stroke="#9fb0c0" stroke-width="1.5"/>
+        <text x="674" y="413" fill="#4cc2ff" font-size="12">GPIO 7</text>
+
+        <text x="380" y="524" text-anchor="middle" fill="#8b949e" font-size="11">El triángulo verde en cada MOSFET = body-diode (camino de recirculación)</text>
+      </svg>
+
+      <h2>Todo junto: el puente completo y dónde va cada cable</h2>
+      <p style="font-size:13px;color:var(--mut);margin:0 0 12px">
+        Los cuadrantes de arriba muestran <i>una</i> rama en detalle. Acá está
+        <b>el puente entero</b>: las 4 llaves, los 4 drivers, los 4 diodos y el motor.
+        Para cablear en protoboard, lo que más sirve es la
+        <b style="color:#7ce8ff">lista de nodos</b> que está debajo del dibujo: te dice
+        qué patas tienen que tocarse en el mismo punto.
+      </p>
+
+      <svg viewBox="0 0 1120 700" style="width:100%;background:#0b0e13;border:1px solid #30363d;border-radius:8px">
+        <style>
+          .rail  { stroke:#ff7b72; stroke-width:3; fill:none }
+          .rail0 { stroke:#8b949e; stroke-width:3; fill:none }
+          .w     { stroke:#6e7681; stroke-width:1.6; fill:none }
+          .wg    { stroke:#d29922; stroke-width:1.6; fill:none }
+          .wsig  { stroke:#7ce8ff; stroke-width:1.6; fill:none }
+          .mos   { fill:#161b22; stroke:#58a6ff; stroke-width:1.6 }
+          .mosn  { fill:#161b22; stroke:#3fb950; stroke-width:1.6 }
+          .bjt   { fill:#161b22; stroke:#8b949e; stroke-width:1.4 }
+          .rr    { fill:#161b22; stroke:#d29922; stroke-width:1.4 }
+          .txt   { font:11px ui-monospace,Consolas,monospace; fill:#c9d1d9 }
+          .sm    { font:9.5px ui-monospace,Consolas,monospace; fill:#8b949e }
+          .nodo  { font:bold 12px ui-monospace,Consolas,monospace; fill:#7ce8ff }
+          .rail-l{ font:bold 12px 'Archivo Narrow',sans-serif; letter-spacing:.1em }
+        </style>
+
+        <!-- ═══ RIELES ═══ -->
+        <path class="rail"  d="M60,50 L1060,50"/>
+        <text class="rail-l" x="60" y="40" fill="#ff7b72">+12 V  (la fuente · alimenta el puente Y los gates)</text>
+        <path class="rail0" d="M60,650 L1060,650"/>
+        <text class="rail-l" x="60" y="672" fill="#8b949e">GND  (masa común: fuente + puente + ESP32)</text>
+
+        <!-- ═══════════ RAMA A (izquierda) ═══════════ -->
+        <!-- P alto -->
+        <rect class="mos" x="300" y="120" width="96" height="62" rx="3"/>
+        <text class="txt" x="312" y="145" fill="#58a6ff">IRF9530N</text>
+        <text class="sm"  x="312" y="160">P · HA</text>
+        <path class="rail" d="M348,50 L348,120"/>
+        <text class="sm" x="356" y="112">S</text>
+        <path class="w" d="M348,182 L348,330"/>
+        <text class="sm" x="356" y="196">D</text>
+        <!-- N bajo -->
+        <rect class="mosn" x="300" y="440" width="96" height="62" rx="3"/>
+        <text class="txt" x="312" y="465" fill="#3fb950">IRFZ44N</text>
+        <text class="sm"  x="312" y="480">N · LA</text>
+        <path class="w" d="M348,330 L348,440"/>
+        <text class="sm" x="356" y="432">D</text>
+        <path class="rail0" d="M348,502 L348,650"/>
+        <text class="sm" x="356" y="520">S</text>
+        <!-- nodo OUT_A -->
+        <circle cx="348" cy="330" r="5" fill="#7ce8ff"/>
+        <text class="nodo" x="264" y="326">OUT_A</text>
+
+        <!-- diodos rama A -->
+        <path class="w" d="M420,90 L420,212 M348,90 L420,90 M348,212 L420,212"/>
+        <path d="M412,145 L428,145 L420,131 z" fill="#8b949e"/>
+        <path d="M412,131 L428,131" stroke="#8b949e" stroke-width="2"/>
+        <text class="sm" x="432" y="148">1N5822</text>
+        <path class="w" d="M420,410 L420,560 M348,410 L420,410 M348,560 L420,560"/>
+        <path d="M412,492 L428,492 L420,478 z" fill="#8b949e"/>
+        <path d="M412,478 L428,478" stroke="#8b949e" stroke-width="2"/>
+        <text class="sm" x="432" y="495">1N5822</text>
+
+        <!-- driver del P alto (izquierda) -->
+        <path class="wg" d="M300,151 L250,151"/>
+        <circle cx="250" cy="151" r="4" fill="#d29922"/>
+        <text class="nodo" x="196" y="146" fill="#d29922">G_HA</text>
+        <rect class="rr" x="215" y="86" width="70" height="16" rx="2"/>
+        <text class="sm" x="232" y="98" fill="#d29922">2k2</text>
+        <path class="wg" d="M250,86 L250,50 M250,102 L250,151"/>
+        <rect class="rr" x="150" y="143" width="56" height="16" rx="2"/>
+        <text class="sm" x="163" y="155" fill="#d29922">100R</text>
+        <path class="wg" d="M150,151 L120,151"/>
+        <rect class="bjt" x="70" y="130" width="50" height="42" rx="3"/>
+        <text class="sm" x="76" y="148">2N2222</text>
+        <text class="sm" x="76" y="163">C E B</text>
+        <path class="rail0" d="M95,172 L95,650"/>
+        <path class="wsig" d="M70,151 L30,151"/>
+        <rect class="rr" x="-2" y="143" width="34" height="16" rx="2" stroke="#7ce8ff"/>
+        <text class="sm" x="4" y="155" fill="#7ce8ff">1k</text>
+        <text class="txt" x="-2" y="134" fill="#7ce8ff">GPIO 4</text>
+
+        <!-- driver del N bajo -->
+        <path class="wg" d="M300,471 L250,471"/>
+        <circle cx="250" cy="471" r="4" fill="#d29922"/>
+        <text class="nodo" x="196" y="466" fill="#d29922">G_LA</text>
+        <rect class="rr" x="215" y="406" width="70" height="16" rx="2"/>
+        <text class="sm" x="232" y="418" fill="#d29922">2k2</text>
+        <path class="wg" d="M250,406 L250,50 M250,422 L250,471"/>
+        <rect class="rr" x="150" y="463" width="56" height="16" rx="2"/>
+        <text class="sm" x="163" y="475" fill="#d29922">100R</text>
+        <path class="wg" d="M150,471 L120,471"/>
+        <rect class="bjt" x="70" y="450" width="50" height="42" rx="3"/>
+        <text class="sm" x="76" y="468">2N2222</text>
+        <text class="sm" x="76" y="483">C E B</text>
+        <path class="rail0" d="M95,492 L95,650"/>
+        <path class="wsig" d="M70,471 L30,471"/>
+        <rect class="rr" x="-2" y="463" width="34" height="16" rx="2" stroke="#7ce8ff"/>
+        <text class="sm" x="4" y="475" fill="#7ce8ff">1k</text>
+        <text class="txt" x="-2" y="454" fill="#7ce8ff">GPIO 5</text>
+
+        <!-- ═══════════ MOTOR ═══════════ -->
+        <path class="w" d="M348,330 L500,330"/>
+        <circle cx="560" cy="330" r="42" fill="#161b22" stroke="#e6edf3" stroke-width="2"/>
+        <text x="560" y="336" text-anchor="middle" font-size="22" fill="#e6edf3" font-family="serif">M</text>
+        <text x="560" y="392" text-anchor="middle" class="txt">motor CC 12 V</text>
+        <path class="w" d="M518,330 L500,330 M602,330 L620,330"/>
+        <path class="w" d="M620,330 L772,330"/>
+
+        <!-- ═══════════ RAMA B (derecha) ═══════════ -->
+        <rect class="mos" x="724" y="120" width="96" height="62" rx="3"/>
+        <text class="txt" x="736" y="145" fill="#58a6ff">IRF9530N</text>
+        <text class="sm"  x="736" y="160">P · HB</text>
+        <path class="rail" d="M772,50 L772,120"/>
+        <text class="sm" x="700" y="112">S</text>
+        <path class="w" d="M772,182 L772,330"/>
+        <text class="sm" x="700" y="196">D</text>
+        <rect class="mosn" x="724" y="440" width="96" height="62" rx="3"/>
+        <text class="txt" x="736" y="465" fill="#3fb950">IRFZ44N</text>
+        <text class="sm"  x="736" y="480">N · LB</text>
+        <path class="w" d="M772,330 L772,440"/>
+        <text class="sm" x="700" y="432">D</text>
+        <path class="rail0" d="M772,502 L772,650"/>
+        <text class="sm" x="700" y="520">S</text>
+        <circle cx="772" cy="330" r="5" fill="#7ce8ff"/>
+        <text class="nodo" x="786" y="326">OUT_B</text>
+
+        <path class="w" d="M680,90 L680,212 M772,90 L680,90 M772,212 L680,212"/>
+        <path d="M672,145 L688,145 L680,131 z" fill="#8b949e"/>
+        <path d="M672,131 L688,131" stroke="#8b949e" stroke-width="2"/>
+        <text class="sm" x="620" y="148">1N5822</text>
+        <path class="w" d="M680,410 L680,560 M772,410 L680,410 M772,560 L680,560"/>
+        <path d="M672,492 L688,492 L680,478 z" fill="#8b949e"/>
+        <path d="M672,478 L688,478" stroke="#8b949e" stroke-width="2"/>
+        <text class="sm" x="620" y="495">1N5822</text>
+
+        <!-- drivers rama B (a la derecha) -->
+        <path class="wg" d="M820,151 L870,151"/>
+        <circle cx="870" cy="151" r="4" fill="#d29922"/>
+        <text class="nodo" x="884" y="146" fill="#d29922">G_HB</text>
+        <rect class="rr" x="835" y="86" width="70" height="16" rx="2"/>
+        <text class="sm" x="852" y="98" fill="#d29922">2k2</text>
+        <path class="wg" d="M870,86 L870,50 M870,102 L870,151"/>
+        <rect class="rr" x="914" y="143" width="56" height="16" rx="2"/>
+        <text class="sm" x="927" y="155" fill="#d29922">100R</text>
+        <path class="wg" d="M970,151 L1000,151"/>
+        <rect class="bjt" x="1000" y="130" width="50" height="42" rx="3"/>
+        <text class="sm" x="1004" y="148">2N2222</text>
+        <text class="sm" x="1004" y="163">C E B</text>
+        <path class="rail0" d="M1025,172 L1025,650"/>
+        <text class="txt" x="1056" y="146" fill="#7ce8ff">GPIO 6</text>
+
+        <path class="wg" d="M820,471 L870,471"/>
+        <circle cx="870" cy="471" r="4" fill="#d29922"/>
+        <text class="nodo" x="884" y="466" fill="#d29922">G_LB</text>
+        <rect class="rr" x="835" y="406" width="70" height="16" rx="2"/>
+        <text class="sm" x="852" y="418" fill="#d29922">2k2</text>
+        <path class="wg" d="M870,406 L870,50 M870,422 L870,471"/>
+        <rect class="rr" x="914" y="463" width="56" height="16" rx="2"/>
+        <text class="sm" x="927" y="475" fill="#d29922">100R</text>
+        <path class="wg" d="M970,471 L1000,471"/>
+        <rect class="bjt" x="1000" y="450" width="50" height="42" rx="3"/>
+        <text class="sm" x="1004" y="468">2N2222</text>
+        <text class="sm" x="1004" y="483">C E B</text>
+        <path class="rail0" d="M1025,492 L1025,650"/>
+        <text class="txt" x="1056" y="466" fill="#7ce8ff">GPIO 7</text>
+
+        <text class="sm" x="440" y="620" fill="#6e7681">Los 4 drivers son IDÉNTICOS. Solo cambian el pin del ESP32 y a qué gate van.</text>
+      </svg>
+
+      <h3 style="margin:20px 0 6px;font-size:14px;color:#e6edf3">Lista de nodos — qué patas van al mismo punto</h3>
+      <p style="font-size:12.5px;color:var(--mut);margin:0 0 10px">
+        Cada fila es <b>un punto eléctrico</b>. Todo lo que está en la misma fila tiene que
+        quedar unido: misma pista de la protoboard, o puenteado con cable.
+      </p>
+
+      <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:12.5px">
+        <thead>
+          <tr style="border-bottom:1px solid #30363d">
+            <th style="text-align:left;padding:7px 8px;color:#7ce8ff;font-family:'Archivo Narrow',sans-serif;text-transform:uppercase;letter-spacing:.1em;font-size:11px">Nodo</th>
+            <th style="text-align:left;padding:7px 8px;color:#8b949e;font-family:'Archivo Narrow',sans-serif;text-transform:uppercase;letter-spacing:.1em;font-size:11px">Se juntan acá</th>
+          </tr>
+        </thead>
+        <tbody style="font-family:ui-monospace,Consolas,monospace;color:#c9d1d9">
+          <tr style="border-bottom:1px solid #21262d;background:rgba(255,123,114,.06)">
+            <td style="padding:8px;color:#ff7b72;white-space:nowrap"><b>+12 V</b></td>
+            <td style="padding:8px">
+              (+) de la fuente · <b>S</b> del P·HA · <b>S</b> del P·HB ·
+              cátodo de los 2 Schottky de arriba · un extremo de las <b>4 resistencias de 2k2</b>
+            </td>
+          </tr>
+          <tr style="border-bottom:1px solid #21262d;background:rgba(139,148,158,.06)">
+            <td style="padding:8px;color:#8b949e;white-space:nowrap"><b>GND</b></td>
+            <td style="padding:8px">
+              (−) de la fuente · <b>S</b> del N·LA · <b>S</b> del N·LB ·
+              ánodo de los 2 Schottky de abajo · <b>emisor de los 4 2N2222</b> ·
+              <b style="color:#7ce8ff">GND del ESP32</b>
+            </td>
+          </tr>
+          <tr style="border-bottom:1px solid #21262d">
+            <td style="padding:8px;color:#7ce8ff;white-space:nowrap"><b>OUT_A</b></td>
+            <td style="padding:8px">
+              <b>D</b> del P·HA · <b>D</b> del N·LA · ánodo del Schottky de arriba (rama A) ·
+              cátodo del de abajo (rama A) · <b>un cable del motor</b>
+            </td>
+          </tr>
+          <tr style="border-bottom:1px solid #21262d">
+            <td style="padding:8px;color:#7ce8ff;white-space:nowrap"><b>OUT_B</b></td>
+            <td style="padding:8px">
+              <b>D</b> del P·HB · <b>D</b> del N·LB · ánodo del Schottky de arriba (rama B) ·
+              cátodo del de abajo (rama B) · <b>el otro cable del motor</b>
+            </td>
+          </tr>
+          <tr style="border-bottom:1px solid #21262d">
+            <td style="padding:8px;color:#d29922;white-space:nowrap"><b>G_HA</b></td>
+            <td style="padding:8px"><b>G</b> del P·HA · una 2k2 (al +12 V) · una 100R (al colector de su 2N2222)</td>
+          </tr>
+          <tr style="border-bottom:1px solid #21262d">
+            <td style="padding:8px;color:#d29922;white-space:nowrap"><b>G_LA</b></td>
+            <td style="padding:8px"><b>G</b> del N·LA · una 2k2 (al +12 V) · una 100R (al colector de su 2N2222)</td>
+          </tr>
+          <tr style="border-bottom:1px solid #21262d">
+            <td style="padding:8px;color:#d29922;white-space:nowrap"><b>G_HB</b></td>
+            <td style="padding:8px"><b>G</b> del P·HB · una 2k2 (al +12 V) · una 100R (al colector de su 2N2222)</td>
+          </tr>
+          <tr style="border-bottom:1px solid #21262d">
+            <td style="padding:8px;color:#d29922;white-space:nowrap"><b>G_LB</b></td>
+            <td style="padding:8px"><b>G</b> del N·LB · una 2k2 (al +12 V) · una 100R (al colector de su 2N2222)</td>
+          </tr>
+          <tr style="border-bottom:1px solid #21262d">
+            <td style="padding:8px;color:#7ce8ff;white-space:nowrap">4 bases</td>
+            <td style="padding:8px">
+              cada <b>B</b> de 2N2222 lleva su propia <b>1k</b> al pin del ESP32:
+              <b style="color:#7ce8ff">GPIO 4→HA</b> · <b style="color:#7ce8ff">GPIO 5→LA</b> ·
+              <b style="color:#7ce8ff">GPIO 6→HB</b> · <b style="color:#7ce8ff">GPIO 7→LB</b>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;margin-top:14px">
+        <div style="background:#161b22;border:1px solid #30363d;border-left:3px solid #7ce8ff;padding:10px 12px;border-radius:4px">
+          <div style="font:bold 11px 'Archivo Narrow',sans-serif;letter-spacing:.1em;color:#7ce8ff;text-transform:uppercase;margin-bottom:5px">El motor</div>
+          <div style="font-size:12.5px;color:#8b949e">Va <b style="color:#c9d1d9">entre OUT_A y OUT_B</b>, en el medio del
+            puente. <b>No toca la fuente</b>: los MOSFET son los que lo conectan a +12&nbsp;V o a masa.
+            No tiene polaridad — el sentido lo decide el puente.</div>
+        </div>
+        <div style="background:#161b22;border:1px solid #30363d;border-left:3px solid #d29922;padding:10px 12px;border-radius:4px">
+          <div style="font:bold 11px 'Archivo Narrow',sans-serif;letter-spacing:.1em;color:#d29922;text-transform:uppercase;margin-bottom:5px">Los 2N2222</div>
+          <div style="font-size:12.5px;color:#8b949e">No llevan alimentación propia. Solo <b style="color:#c9d1d9">tiran el gate
+            a masa</b> cuando el ESP32 les manda 3,3&nbsp;V a la base. Los 12&nbsp;V al gate se los da la 2k2
+            cuando el transistor está apagado.</div>
+        </div>
+        <div style="background:#161b22;border:1px solid #30363d;border-left:3px solid #3fb950;padding:10px 12px;border-radius:4px">
+          <div style="font:bold 11px 'Archivo Narrow',sans-serif;letter-spacing:.1em;color:#3fb950;text-transform:uppercase;margin-bottom:5px">Cómo orientar los Schottky</div>
+          <div style="font-size:12.5px;color:#8b949e">La <b style="color:#c9d1d9">banda del diodo va siempre hacia el
+            lado más positivo</b>: en los de arriba, hacia +12&nbsp;V; en los de abajo, hacia OUT.
+            Al revés cortocircuitás la fuente.</div>
+        </div>
+      </div>
+
+      <p style="font-size:12.5px;color:#8b949e;margin:14px 0 0;padding:10px 12px;background:rgba(63,185,80,.08);border-left:3px solid #3fb950">
+        <b style="color:#3fb950">Orden para armar en la protoboard:</b> primero los dos rieles (+12&nbsp;V y GND) y
+        la masa del ESP32. Después <b>una sola rama completa</b> — el P, el N, sus dos drivers y sus dos diodos — y
+        la probás con el osciloscopio <b>sin motor</b>. Recién cuando esa rama da bien, copiás la otra
+        igual y colgás el motor entre OUT_A y OUT_B. Armar las dos juntas y probar al final es la forma
+        más rápida de no encontrar nunca el error.
+      </p>
+
+
+      <h2 style="margin-top:16px">Conexión real, cuadrante por cuadrante (todo cableado)</h2>
+      <p style="font-size:12.5px;color:var(--mut);margin:0 0 8px">
+        Cada cuadrante muestra TODO: la fuente, el MOSFET (S/G/D), las resistencias hasta el
+        gate, el 2N2222, el diodo Schottky y el nodo <b>OUT_A</b> que va al motor. Los dos
+        cuadrantes comparten OUT_A = <b>una rama del puente</b>. La otra rama (B) es idéntica
+        con los pines <code>GPIO 6</code> y <code>GPIO 7</code>.
+      </p>
+      <div style="display:flex;gap:14px;flex-wrap:wrap">
+
+        <!-- ===================== CUADRANTE HIGH-SIDE (P) ===================== -->
+        <svg viewBox="0 0 380 470" style="flex:1;min-width:320px;background:#0b0e13;border:1px solid var(--bd);border-radius:8px" font-family="Consolas,monospace">
+          <text x="10" y="18" fill="#ff9b6b" font-size="12">CUADRANTE HIGH-SIDE (P · HA)</text>
+          <!-- rails -->
+          <line x1="30" y1="40" x2="352" y2="40" stroke="#ff6b6b" stroke-width="2.2"/>
+          <text x="34" y="33" fill="#ff9b6b" font-size="11">+Vmot (motor)</text>
+          <line x1="30" y1="440" x2="352" y2="440" stroke="#9fb0c0" stroke-width="2.2"/>
+          <text x="34" y="434" fill="#9fb0c0" font-size="11">GND</text>
+
+          <!-- MOSFET P -->
+          <rect x="205" y="90" width="90" height="64" rx="6" fill="#141a22" stroke="#ff9b6b" stroke-width="1.5"/>
+          <text x="250" y="114" text-anchor="middle" fill="#e6edf3" font-size="12">IRF9530N</text>
+          <text x="250" y="134" text-anchor="middle" fill="#ff9b6b" font-size="11">P · HA</text>
+          <!-- source -> +Vmot -->
+          <line x1="250" y1="40" x2="250" y2="90" stroke="#9fb0c0" stroke-width="1.6"/>
+          <text x="256" y="68" fill="#8b949e" font-size="10">S</text>
+          <!-- drain -> OUT_A -->
+          <line x1="250" y1="154" x2="250" y2="232" stroke="#9fb0c0" stroke-width="1.6"/>
+          <text x="256" y="172" fill="#8b949e" font-size="10">D</text>
+          <circle cx="250" cy="232" r="3.5" fill="#9fb0c0"/>
+          <line x1="250" y1="232" x2="340" y2="232" stroke="#7ee0a0" stroke-width="1.6"/>
+          <text x="250" y="252" fill="#7ee0a0" font-size="11">OUT_A → al motor</text>
+          <!-- gate -->
+          <line x1="205" y1="122" x2="150" y2="122" stroke="#9fb0c0" stroke-width="1.6"/>
+          <text x="200" y="113" text-anchor="end" fill="#cdd6e0" font-size="11">G</text>
+          <text x="158" y="114" fill="#8b949e" font-size="9">gate</text>
+
+          <!-- Schottky anti-paralelo (cátodo arriba, a +Vmot) -->
+          <line x1="250" y1="180" x2="320" y2="180" stroke="#9fb0c0" stroke-width="1.4"/>
+          <line x1="320" y1="180" x2="320" y2="118" stroke="#9fb0c0" stroke-width="1.4"/>
+          <path d="M308,118 L332,118 L320,100 Z" fill="none" stroke="#7ee0a0" stroke-width="1.4"/>
+          <line x1="308" y1="96" x2="332" y2="96" stroke="#7ee0a0" stroke-width="1.6"/>
+          <line x1="320" y1="96" x2="320" y2="40" stroke="#9fb0c0" stroke-width="1.4"/>
+          <text x="326" y="150" fill="#8b949e" font-size="9">1N5822</text>
+
+          <!-- gate node -->
+          <circle cx="150" cy="122" r="3.5" fill="#9fb0c0"/>
+          <!-- pull-up 10k a +Vmot -->
+          <line x1="150" y1="122" x2="150" y2="96" stroke="#9fb0c0" stroke-width="1.4"/>
+          <rect x="138" y="66" width="24" height="30" fill="#141a22" stroke="#d29922" stroke-width="1.2"/>
+          <text x="166" y="86" fill="#8b949e" font-size="10">2k2</text>
+          <line x1="150" y1="66" x2="150" y2="40" stroke="#9fb0c0" stroke-width="1.4"/>
+          <!-- 1k serie + 2N2222 -->
+          <line x1="150" y1="122" x2="150" y2="160" stroke="#9fb0c0" stroke-width="1.4"/>
+          <rect x="138" y="160" width="24" height="26" fill="#141a22" stroke="#d29922" stroke-width="1.2"/>
+          <text x="166" y="178" fill="#8b949e" font-size="10">100Ω</text>
+          <line x1="150" y1="186" x2="150" y2="212" stroke="#9fb0c0" stroke-width="1.4"/>
+          <circle cx="150" cy="228" r="16" fill="#141a22" stroke="#d29922" stroke-width="1.3"/>
+          <!-- simbolo NPN (base / colector / emisor) -->
+          <line x1="145" y1="219" x2="145" y2="237" stroke="#d29922" stroke-width="1.8"/>
+          <line x1="145" y1="224" x2="156" y2="214" stroke="#d29922" stroke-width="1.4"/>
+          <line x1="145" y1="232" x2="156" y2="242" stroke="#d29922" stroke-width="1.4"/>
+          <path d="M156,242 l-6,-1.5 l3.5,-4.5 z" fill="#d29922"/>
+          <text x="92" y="204" text-anchor="middle" fill="#d29922" font-size="10">2N2222</text>
+          <text x="163" y="214" fill="#cdd6e0" font-size="10">C</text>
+          <text x="163" y="248" fill="#cdd6e0" font-size="10">E</text>
+          <text x="131" y="220" fill="#cdd6e0" font-size="10">B</text>
+          <line x1="150" y1="244" x2="150" y2="440" stroke="#9fb0c0" stroke-width="1.4"/>
+          <!-- base 4k7 a GPIO 4 -->
+          <line x1="134" y1="228" x2="110" y2="228" stroke="#9fb0c0" stroke-width="1.4"/>
+          <rect x="86" y="216" width="24" height="24" fill="#141a22" stroke="#d29922" stroke-width="1.2"/>
+          <text x="98" y="210" text-anchor="middle" fill="#8b949e" font-size="10">1k</text>
+          <line x1="86" y1="228" x2="50" y2="228" stroke="#9fb0c0" stroke-width="1.4"/>
+          <text x="46" y="232" text-anchor="end" fill="#4cc2ff" font-size="11">GPIO 4</text>
+        </svg>
+
+        <!-- ===================== CUADRANTE LOW-SIDE (N) ===================== -->
+        <svg viewBox="0 0 380 470" style="flex:1;min-width:320px;background:#0b0e13;border:1px solid var(--bd);border-radius:8px" font-family="Consolas,monospace">
+          <text x="10" y="18" fill="#6bd3ff" font-size="12">CUADRANTE LOW-SIDE (N · LA)</text>
+          <!-- rails -->
+          <line x1="30" y1="40" x2="352" y2="40" stroke="#d29922" stroke-width="2.2"/>
+          <text x="34" y="33" fill="#d29922" font-size="11">+12 V (solo gates)</text>
+          <line x1="30" y1="440" x2="352" y2="440" stroke="#9fb0c0" stroke-width="2.2"/>
+          <text x="34" y="434" fill="#9fb0c0" font-size="11">GND</text>
+
+          <!-- OUT_A entra de arriba -->
+          <text x="250" y="200" text-anchor="middle" fill="#7ee0a0" font-size="11">OUT_A ← del motor</text>
+          <circle cx="250" cy="212" r="3.5" fill="#9fb0c0"/>
+          <line x1="250" y1="212" x2="340" y2="212" stroke="#7ee0a0" stroke-width="1.6"/>
+          <!-- MOSFET N -->
+          <line x1="250" y1="212" x2="250" y2="250" stroke="#9fb0c0" stroke-width="1.6"/>
+          <text x="256" y="238" fill="#8b949e" font-size="10">D</text>
+          <rect x="205" y="250" width="90" height="64" rx="6" fill="#141a22" stroke="#6bd3ff" stroke-width="1.5"/>
+          <text x="250" y="274" text-anchor="middle" fill="#e6edf3" font-size="12">IRFZ44N</text>
+          <text x="250" y="294" text-anchor="middle" fill="#6bd3ff" font-size="11">N · LA</text>
+          <!-- source -> GND -->
+          <line x1="250" y1="314" x2="250" y2="440" stroke="#9fb0c0" stroke-width="1.6"/>
+          <text x="256" y="332" fill="#8b949e" font-size="10">S</text>
+          <!-- gate -->
+          <line x1="205" y1="282" x2="150" y2="282" stroke="#9fb0c0" stroke-width="1.6"/>
+          <text x="200" y="273" text-anchor="end" fill="#cdd6e0" font-size="11">G</text>
+          <text x="158" y="274" fill="#8b949e" font-size="9">gate</text>
+
+          <!-- Schottky anti-paralelo (cátodo arriba, a OUT_A/drain) -->
+          <line x1="300" y1="212" x2="300" y2="250" stroke="#9fb0c0" stroke-width="1.4"/>
+          <line x1="288" y1="250" x2="312" y2="250" stroke="#7ee0a0" stroke-width="1.6"/>
+          <path d="M288,272 L312,272 L300,250 Z" fill="none" stroke="#7ee0a0" stroke-width="1.4"/>
+          <line x1="300" y1="272" x2="300" y2="440" stroke="#9fb0c0" stroke-width="1.4"/>
+          <text x="306" y="360" fill="#8b949e" font-size="9">1N5822</text>
+
+          <!-- gate node -->
+          <circle cx="150" cy="282" r="3.5" fill="#9fb0c0"/>
+          <!-- pull-up 10k a +12V -->
+          <line x1="150" y1="282" x2="150" y2="148" stroke="#9fb0c0" stroke-width="1.4"/>
+          <rect x="138" y="118" width="24" height="30" fill="#141a22" stroke="#d29922" stroke-width="1.2"/>
+          <text x="166" y="138" fill="#8b949e" font-size="10">2k2</text>
+          <line x1="150" y1="118" x2="150" y2="40" stroke="#9fb0c0" stroke-width="1.4"/>
+          <!-- 1k serie + 2N2222 -->
+          <line x1="150" y1="282" x2="150" y2="300" stroke="#9fb0c0" stroke-width="1.4"/>
+          <rect x="138" y="300" width="24" height="26" fill="#141a22" stroke="#d29922" stroke-width="1.2"/>
+          <text x="166" y="318" fill="#8b949e" font-size="10">100Ω</text>
+          <line x1="150" y1="326" x2="150" y2="352" stroke="#9fb0c0" stroke-width="1.4"/>
+          <circle cx="150" cy="368" r="16" fill="#141a22" stroke="#d29922" stroke-width="1.3"/>
+          <!-- simbolo NPN (base / colector / emisor) -->
+          <line x1="145" y1="359" x2="145" y2="377" stroke="#d29922" stroke-width="1.8"/>
+          <line x1="145" y1="364" x2="156" y2="354" stroke="#d29922" stroke-width="1.4"/>
+          <line x1="145" y1="372" x2="156" y2="382" stroke="#d29922" stroke-width="1.4"/>
+          <path d="M156,382 l-6,-1.5 l3.5,-4.5 z" fill="#d29922"/>
+          <text x="92" y="344" text-anchor="middle" fill="#d29922" font-size="10">2N2222</text>
+          <text x="163" y="354" fill="#cdd6e0" font-size="10">C</text>
+          <text x="163" y="388" fill="#cdd6e0" font-size="10">E</text>
+          <text x="131" y="360" fill="#cdd6e0" font-size="10">B</text>
+          <line x1="150" y1="384" x2="150" y2="440" stroke="#9fb0c0" stroke-width="1.4"/>
+          <!-- base 4k7 a GPIO 5 -->
+          <line x1="134" y1="368" x2="110" y2="368" stroke="#9fb0c0" stroke-width="1.4"/>
+          <rect x="86" y="356" width="24" height="24" fill="#141a22" stroke="#d29922" stroke-width="1.2"/>
+          <text x="98" y="350" text-anchor="middle" fill="#8b949e" font-size="10">1k</text>
+          <line x1="86" y1="368" x2="50" y2="368" stroke="#9fb0c0" stroke-width="1.4"/>
+          <text x="46" y="372" text-anchor="end" fill="#4cc2ff" font-size="11">GPIO 5</text>
+        </svg>
+      </div>
+      <p style="font-size:12.5px;color:var(--mut);margin:8px 0 0">
+        Las dos mitades se unen en <b style="color:#7ee0a0">OUT_A</b>: el drain del P (arriba) y el
+        drain del N (abajo) van al mismo punto, y de ahí sale el cable al motor. Fijate que es el
+        <b>mismo bloque de driver</b> en los dos; solo cambia el pull-up: el lado
+        <b style="color:#ff9b6b">P</b> a <b>+Vmot</b>, el lado <b style="color:#6bd3ff">N</b> a
+        <b>+12&nbsp;V</b>. El 2N2222 <b>invierte</b> (pin&nbsp;=&nbsp;1 → MOSFET apagado).
+      </p>
+
+      <h2 style="margin-top:16px">Lista de compras (ByP)</h2>
+      <table>
+        <tr><th>Componente</th><th>Parte en ByP</th><th>Cant.</th><th>Función</th></tr>
+        <tr><td>MOSFET canal P</td><td><code>IRF9530N</code> P-CH 100V 12A · ~$2.635</td><td>2</td><td>llaves high-side HA, HB</td></tr>
+        <tr><td>MOSFET canal N</td><td><code>IRFZ44N</code> N-CH 60V 50A · ~$2.317</td><td>2</td><td>llaves low-side LA, LB</td></tr>
+        <tr><td>Transistor NPN</td><td><code>2N2222</code> 40V 1A</td><td>4</td><td>level-shift 3.3 V → gate (sirve igual sea Vmot 6/12/24 V)</td></tr>
+        <tr><td>Diodo Schottky</td><td><code>1N5822</code> 3A (o <code>MBR20100CT</code> 20A)</td><td>4</td><td>recirculación rápida (NO uses 1N4007: muy lento para 20 kHz)</td></tr>
+        <tr><td>Resistencias</td><td>1k · 100Ω · 2k2 (1/4 W)</td><td>4 c/u</td><td>base / serie de gate / pull-up</td></tr>
+        <tr><td>Capacitores</td><td>470 µF electrolítico + 100 nF</td><td>1 + 4</td><td>filtro del bus de +Vmot</td></tr>
+        <tr><td>Fuente +12 V (gates)</td><td>cargador / fuente de protoboard</td><td>1</td><td>solo para los gates del lado N (si Vmot=12 V, se comparte)</td></tr>
+      </table>
+
+      <ul style="font-size:12.5px;color:var(--mut);line-height:1.6;margin:10px 0 0;padding-left:18px">
+        <li><b>GND común</b> obligatorio entre ESP32, las dos fuentes (+Vmot y +12 V) y la etapa de potencia.</li>
+        <li><b>Dos rails:</b> +Vmot = el voltaje de tu motor (fuente aparte, no el USB del ESP32); +12&nbsp;V = solo para los gates del lado N. Si tu motor ya es de 12&nbsp;V, los dos son el mismo y compartís.</li>
+        <li>Si el motor es de <b>menos de ~9&nbsp;V</b>, el lado P prende "flojo" (Vgs=−Vmot). Para un motorcito de ~1,5&nbsp;A anda igual; si calienta, ahí sí conviene un P-MOS logic-level (a pedido en ByP).</li>
+        <li>Si el motor es de <b>más de ~18 V</b>: agregá un <b>zener de 15&nbsp;V</b> gate-source en cada MOSFET (el Vgs máx del IRFZ44N/IRF9530N es ±20&nbsp;V).</li>
+        <li>Como el 2N2222 <b>invierte</b>, al armarlo el firmware va con polaridad <code>CCxP=0 / CCxNP=1</code> (avisame y lo ajusto; ahora está en drive directo para ver señales).</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>Cable por cable: del pin del ESP32 al motor</h2>
+      <p style="font-size:13px;color:var(--mut);margin:0 0 12px">
+        La lista de nodos dice qué va unido con qué. Esto es la <b style="color:#c9d1d9">lista para armar</b>:
+        seguila en orden y tildá. Los cuadrantes de más arriba muestran cómo se ve armado;
+        esto dice, pata por pata, a qué nodo va cada una. Son <b style="color:#c9d1d9">4 drivers idénticos</b>,
+        <b style="color:#c9d1d9">4 MOSFET</b>, <b style="color:#c9d1d9">4 diodos</b> y
+        <b style="color:#c9d1d9">5 cables</b> de potencia y masa. Nada más.
+      </p>
+
+      <h3 style="margin:20px 0 6px;font-size:14px;color:#e6edf3">Los 4 drivers: de qué pin, a qué gate</h3>
+      <table>
+        <tr><th>Driver</th><th>Viene de</th><th>Va al gate</th><th>Que es el de</th></tr>
+        <tr><td>1</td><td><code>GPIO 4</code></td><td><code>G_HA</code></td><td>P de arriba, rama A (IRF9530N)</td></tr>
+        <tr><td>2</td><td><code>GPIO 5</code></td><td><code>G_LA</code></td><td>N de abajo, rama A (IRFZ44N)</td></tr>
+        <tr><td>3</td><td><code>GPIO 6</code></td><td><code>G_HB</code></td><td>P de arriba, rama B (IRF9530N)</td></tr>
+        <tr><td>4</td><td><code>GPIO 7</code></td><td><code>G_LB</code></td><td>N de abajo, rama B (IRFZ44N)</td></tr>
+      </table>
+      <p style="font-size:12.5px;color:var(--mut);margin:9px 0 0">
+        Cada driver necesita <b>sus propias</b> 1k, 100R y 2k2: son
+        <b style="color:#c9d1d9">4 de cada una</b>. Los 4 emisores van todos al mismo GND.
+      </p>
+
+      <h3 style="margin:20px 0 6px;font-size:14px;color:#e6edf3">Los 4 MOSFET: cada pata a su nodo</h3>
+      <p style="font-size:12.5px;color:var(--mut);margin:0 0 9px">
+        TO-220, mirando el lado impreso con las patas para abajo:
+        <b style="color:#c9d1d9">G – D – S</b> de izquierda a derecha, y <b>la chapa es el Drain</b>.
+        Comprobalo con continuidad contra la pata del medio antes de armar.
+      </p>
+      <table>
+        <tr><th>MOSFET</th><th>Modelo</th><th>G (gate)</th><th>D (chapa)</th><th>S (source)</th></tr>
+        <tr><td><b>P · HA</b></td><td>IRF9530N</td><td><code>G_HA</code></td><td><code>OUT_A</code></td><td><code>+12 V</code></td></tr>
+        <tr><td><b>N · LA</b></td><td>IRFZ44N</td><td><code>G_LA</code></td><td><code>OUT_A</code></td><td><code>GND</code></td></tr>
+        <tr><td><b>P · HB</b></td><td>IRF9530N</td><td><code>G_HB</code></td><td><code>OUT_B</code></td><td><code>+12 V</code></td></tr>
+        <tr><td><b>N · LB</b></td><td>IRFZ44N</td><td><code>G_LB</code></td><td><code>OUT_B</code></td><td><code>GND</code></td></tr>
+      </table>
+      <p style="font-size:12.5px;color:#8b949e;margin:9px 0 0;padding:9px 11px;background:rgba(255,123,114,.08);border-left:3px solid #ff7b72">
+        <b style="color:#ff7b72">Las chapas de los 4 están a potenciales distintos</b> (dos en <code>OUT_A</code>,
+        dos en <code>OUT_B</code>). Si los atornillás al mismo disipador sin aislante, unís las dos ramas y
+        cortocircuitás el puente. O disipadores separados, o mica y tornillo plástico.
+      </p>
+
+      <h3 style="margin:20px 0 6px;font-size:14px;color:#e6edf3">Los 4 Schottky (1N5822)</h3>
+      <p style="font-size:12.5px;color:var(--mut);margin:0 0 9px">
+        <b>La banda del diodo es el cátodo.</b> Van en antiparalelo con cada MOSFET: recogen la corriente
+        que el motor sigue empujando cuando la llave se abre.
+      </p>
+      <table>
+        <tr><th>Diodo</th><th>Ánodo (sin banda)</th><th>Cátodo (banda)</th><th>Protege a</th></tr>
+        <tr><td>D1</td><td><code>OUT_A</code></td><td><code>+12 V</code></td><td>P · HA</td></tr>
+        <tr><td>D2</td><td><code>GND</code></td><td><code>OUT_A</code></td><td>N · LA</td></tr>
+        <tr><td>D3</td><td><code>OUT_B</code></td><td><code>+12 V</code></td><td>P · HB</td></tr>
+        <tr><td>D4</td><td><code>GND</code></td><td><code>OUT_B</code></td><td>N · LB</td></tr>
+      </table>
+
+      <h3 style="margin:20px 0 6px;font-size:14px;color:#e6edf3">Potencia, motor y masa</h3>
+      <table>
+        <tr><th>#</th><th>Desde</th><th>Hasta</th></tr>
+        <tr><td>1</td><td>(+) de la fuente de 12 V</td><td>riel <code>+12 V</code></td></tr>
+        <tr><td>2</td><td>(−) de la fuente de 12 V</td><td>riel <code>GND</code></td></tr>
+        <tr><td>3</td><td>un cable del motor</td><td><code>OUT_A</code></td></tr>
+        <tr><td>4</td><td>el otro cable del motor</td><td><code>OUT_B</code></td></tr>
+        <tr><td>5</td><td><code>GND</code> del ESP32</td><td>riel <code>GND</code></td></tr>
+      </table>
+      <p style="font-size:12.5px;color:#8b949e;margin:10px 0 0;padding:10px 12px;background:rgba(210,153,34,.08);border-left:3px solid #d29922">
+        <b style="color:#d29922">El motor no va a masa por ningún lado.</b> Queda colgado entre las dos
+        salidas, y eso es justamente lo que permite invertirlo. Y el cable&nbsp;5 no es opcional: sin masa
+        común los 2N2222 no tienen contra qué comparar los 3,3&nbsp;V y el puente no responde. Es el error
+        más frecuente, y no da ningún síntoma que apunte a la causa.
+      </p>
+      <p style="font-size:12.5px;color:#8b949e;margin:10px 0 0">
+        <b style="color:#c9d1d9">Lo único que NO se conecta:</b> los 3,3&nbsp;V del ESP32 no van a ninguna
+        parte del puente. Del ESP32 salen <b>cinco cables y nada más</b>: las cuatro señales y la masa.
+      </p>
+    </div>
+
+<div class="card">
+      <h2>¿Cómo funciona todo? — de la señal al motor</h2>
+
+      <h2 style="font-size:15px;color:#7ee0a0">1 · La cadena completa, paso a paso</h2>
+      <ol style="font-size:13px;color:var(--mut);line-height:1.7;padding-left:20px;margin:6px 0 0">
+        <li>El <b>ESP32 (periferico MCPWM)</b> genera <b>4 señales PWM</b> a 20&nbsp;kHz, una por MOSFET:
+          <code>GPIO 4→HA</code>, <code>GPIO 5→LA</code>, <code>GPIO 6→HB</code>, <code>GPIO 7→LB</code>. Son ondas
+          cuadradas de 0–3,3&nbsp;V donde el <b>ancho del pulso = la velocidad</b>.</li>
+        <li>Cada PWM entra por la <b>1k</b> a la <b>base (B)</b> del <b>2N2222</b>. Cuando el pin está
+          en alto, llega corriente a la base y el transistor <b>satura</b> (se comporta como una llave
+          cerrada entre colector y emisor).</li>
+        <li>El <b>2N2222</b> sube el nivel: con su <b>pull-up 2k2</b> al rail del gate, traslada los
+          3,3&nbsp;V del micro a los <b>~12&nbsp;V</b> que el MOSFET necesita. <b>Pero invierte</b>:
+          pin en alto → colector tira el gate abajo; pin en bajo → el 2k2 sube el gate al rail.</li>
+        <li>El <b>gate</b> manda en el <b>MOSFET</b>, que es una <b>llave</b>: conecta (o no) el terminal
+          del motor (<b>OUT_A / OUT_B</b>) al <b>+Vmot</b> (los de arriba, P) o a <b>GND</b> (los de
+          abajo, N). La <b>100Ω</b> en serie solo amortigua el pico de corriente al gate.</li>
+        <li>Según <b>qué par de MOSFETs conduce</b>, la corriente atraviesa el motor en un sentido o en
+          el otro → el motor gira para un lado o para el otro. Prendiendo y apagando a 20&nbsp;kHz, el
+          motor "promedia" y gira más rápido o más lento según el duty.</li>
+      </ol>
+
+      <h2 style="font-size:15px;color:#7ee0a0;margin-top:18px">2 · Los 4 estados del puente</h2>
+      <table>
+        <tr><th>Estado</th><th>Conducen</th><th>Corriente por el motor</th><th>Resultado</th></tr>
+        <tr><td><b>Avance (FWD)</b></td><td>HA + LB</td><td>+Vmot → OUT_A → motor → OUT_B → GND</td><td>gira →</td></tr>
+        <tr><td><b>Retroceso (REV)</b></td><td>HB + LA</td><td>+Vmot → OUT_B → motor → OUT_A → GND</td><td>gira ←</td></tr>
+        <tr><td><b>Freno</b></td><td>LA + LB (los dos de abajo)</td><td>el motor queda en cortocircuito</td><td>frena duro</td></tr>
+        <tr><td><b>Libre (coast)</b></td><td>ninguno</td><td>sin camino</td><td>gira por inercia</td></tr>
+      </table>
+      <p style="font-size:12.5px;color:var(--mut);margin:8px 0 0">
+        Para regular la <b>velocidad</b>, en vez de tener HA fijo prendido, lo <b>conmutás a 20&nbsp;kHz</b>:
+        si está prendido el 60&nbsp;% del tiempo, el motor ve el 60&nbsp;% de +Vmot. Eso es el <b>PWM</b>.
+      </p>
+
+      <h2 style="font-size:15px;color:#7ee0a0;margin-top:18px">3 · ¿Por qué el dead-time?</h2>
+      <p style="font-size:13px;color:var(--mut);line-height:1.6;margin:6px 0 0">
+        En cada rama hay un MOSFET arriba y uno abajo. Si por un instante <b>conducen los dos a la vez</b>,
+        conectás <b>+Vmot directo a GND</b> a través de ellos: un cortocircuito que los <b>quema</b>
+        (se llama <i>shoot-through</i>). El <b>dead-time</b> es una pausa de ~500&nbsp;ns en cada cambio:
+        primero <b>apago el que estaba</b>, espero, y recién <b>prendo el otro</b>. Así nunca se pisan.
+        El TIM1 lo genera por hardware (no depende del software).
+      </p>
+
+      <h2 style="font-size:15px;color:#7ee0a0;margin-top:18px">4 · Los diodos Schottky (recirculación)</h2>
+      <p style="font-size:13px;color:var(--mut);line-height:1.6;margin:6px 0 0">
+        El motor es <b>inductivo</b>: cuando apagás un MOSFET, la corriente <b>no se corta de golpe</b>,
+        quiere seguir circulando. Si no le das camino, aparece un <b>pico de voltaje</b> que perfora los
+        MOSFETs. El <b>1N5822</b> (en antiparalelo con cada MOSFET) le da por dónde seguir hasta que se
+        descarga. Tiene que ser <b>Schottky</b> (rápido); un 1N4007 no llega a 20&nbsp;kHz.
+      </p>
+
+      <h2 style="font-size:15px;color:#4cc2ff;margin-top:18px">5 · En el osciloscopio: dónde colgarte y qué ver</h2>
+
+      <p style="font-size:12.5px;color:var(--mut);margin:6px 0 8px"><b>Vista A — el PWM (poné ~10&nbsp;µs/div):</b></p>
+      <svg viewBox="0 0 720 230" style="width:100%;background:#0b0e13;border:1px solid var(--bd);border-radius:8px" font-family="Consolas,monospace">
+        <!-- marcador de periodo -->
+        <line x1="120" y1="40" x2="300" y2="40" stroke="#8b949e" stroke-width="1"/>
+        <line x1="120" y1="35" x2="120" y2="45" stroke="#8b949e" stroke-width="1"/>
+        <line x1="300" y1="35" x2="300" y2="45" stroke="#8b949e" stroke-width="1"/>
+        <text x="210" y="32" text-anchor="middle" fill="#8b949e" font-size="11">1 ciclo = 50 µs (20 kHz)</text>
+        <!-- GPIO 4 -->
+        <text x="10" y="78" fill="#4cc2ff" font-size="12">GPIO 4 (pin)</text>
+        <text x="10" y="92" fill="#8b949e" font-size="10">0–3,3 V</text>
+        <polyline points="120,60 228,60 228,96 300,96 300,60 408,60 408,96 480,96 480,60 588,60 588,96 660,96" fill="none" stroke="#4cc2ff" stroke-width="2"/>
+        <!-- OUT_A -->
+        <text x="10" y="168" fill="#7ee0a0" font-size="12">OUT_A</text>
+        <text x="10" y="182" fill="#8b949e" font-size="10">0↔Vmot</text>
+        <polyline points="120,150 228,150 228,190 300,190 300,150 408,150 408,190 480,190 480,150 588,150 588,190 660,190" fill="none" stroke="#7ee0a0" stroke-width="2"/>
+        <!-- brace duty -->
+        <line x1="120" y1="206" x2="228" y2="206" stroke="#d29922" stroke-width="1.4"/>
+        <text x="174" y="220" text-anchor="middle" fill="#d29922" font-size="11">ancho = velocidad (duty)</text>
+      </svg>
+
+      <p style="font-size:12.5px;color:var(--mut);margin:14px 0 8px"><b>Vista B — el dead-time (poné ~200&nbsp;ns/div, en un flanco):</b></p>
+      <svg viewBox="0 0 720 210" style="width:100%;background:#0b0e13;border:1px solid var(--bd);border-radius:8px" font-family="Consolas,monospace">
+        <!-- zona dead-time -->
+        <rect x="340" y="40" width="60" height="150" fill="#ff6b6b" opacity="0.16"/>
+        <line x1="340" y1="40" x2="340" y2="190" stroke="#ff6b6b" stroke-width="1" stroke-dasharray="4 3"/>
+        <line x1="400" y1="40" x2="400" y2="190" stroke="#ff6b6b" stroke-width="1" stroke-dasharray="4 3"/>
+        <text x="370" y="34" text-anchor="middle" fill="#ff8b8b" font-size="11">dead-time ~500 ns</text>
+        <text x="370" y="206" text-anchor="middle" fill="#ff8b8b" font-size="10">los DOS apagados (no hay shoot-through)</text>
+        <!-- MOSFET arriba -->
+        <text x="10" y="66" fill="#ff9b6b" font-size="12">rama arriba</text>
+        <text x="10" y="80" fill="#8b949e" font-size="10">(HA) conduce</text>
+        <polyline points="120,60 340,60 340,100 690,100" fill="none" stroke="#ff9b6b" stroke-width="2"/>
+        <!-- MOSFET abajo -->
+        <text x="10" y="156" fill="#6bd3ff" font-size="12">rama abajo</text>
+        <text x="10" y="170" fill="#8b949e" font-size="10">(LA) conduce</text>
+        <polyline points="120,190 400,190 400,150 690,150" fill="none" stroke="#6bd3ff" stroke-width="2"/>
+      </svg>
+      <p style="font-size:11.5px;color:var(--mut);margin:6px 0 0">
+        (Dibujo "conduce / no conduce" para que se entienda. En el osciloscopio la <b>tensión del gate</b>
+        va al revés porque el 2N2222 invierte — lo importante es ver el <b>huequito</b> donde ninguno conduce.)
+      </p>
+
+      <h2 style="font-size:14px;margin-top:16px">Puntos de medición</h2>
+      <table>
+        <tr><th>Dónde poner la punta (clip a GND común)</th><th>Qué deberías ver</th></tr>
+        <tr><td><b>Pin del ESP32</b> (GPIO 4/5/6/7)</td><td>cuadrada <b>0–3,3 V</b>, 20 kHz, el ancho cambia con la velocidad</td></tr>
+        <tr><td><b>Gate de un MOSFET de abajo</b> (N) vs GND</td><td>cuadrada <b>0–12 V</b>, invertida respecto al pin, flancos un toque redondeados</td></tr>
+        <tr><td><b>Gate de un MOSFET de arriba</b> (P) vs GND</td><td>cuadrada entre <b>+Vmot y ~0 V</b> (amplitud = Vmot)</td></tr>
+        <tr><td><b>OUT_A</b> (un terminal del motor) vs GND</td><td>PWM <b>0↔Vmot</b> a 20 kHz; el promedio = velocidad</td></tr>
+        <tr><td><b>Gate-arriba y Gate-abajo</b> de la misma rama (2 puntas)</td><td>nunca "ON" los dos juntos: en cada flanco, el <b>hueco de dead-time</b></td></tr>
+        <tr><td><b>OUT_A y OUT_B</b> (2 puntas)</td><td>en <b>bipolar</b> se ven en contrafase; en <b>unipolar</b> una conmuta y la otra queda fija</td></tr>
+      </table>
+      <ul style="font-size:12.5px;color:var(--mut);line-height:1.6;margin:10px 0 0;padding-left:18px">
+        <li><b>El clip de masa del osciloscopio SIEMPRE al GND común</b> del circuito (nunca a un punto flotante).</li>
+        <li>Para ver el <b>período</b> (50 µs) → ~10 µs/div. Para ver el <b>dead-time</b> (500 ns) → ~200 ns/div y dispará en un flanco.</li>
+        <li>Empezá <b>sin motor y con +Vmot bajo</b> (5–6 V): primero verificás las señales de gate y el dead-time, después conectás el motor.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<script>
+const state = { enabled:false, mode:0, dir:'F', speed:0, dt:500, pwm:20000 };
+let histo = [];
+
+function logln(t){ const l=document.getElementById('log');
+  l.textContent += t.replace(/\r/g,'').replace(/\n+$/,'')+'\n'; l.scrollTop=l.scrollHeight; }
+
+// ---- puente con el ESP32 ----------------------------------------
+// El firmware expone GET /estado y GET /cmd?m=..&v=..&d=.. y contesta
+// JSON. Los controles de esta pagina hablan el protocolo viejo de la
+// Blue Pill (M0/F300/D500/...), asi que se traduce aca y se devuelve
+// una linea [estado] con el formato que parse() ya sabe leer. Toda la
+// interfaz de arriba queda intacta.
+let ESP = localStorage.getItem('esp') || 'http://192.168.4.1';
+let ultimoSentido = 'F';
+
+function setEsp(v){
+  ESP = v.replace(/\/+$/,'');
+  if(!/^https?:\/\//.test(ESP)) ESP = 'http://'+ESP;
+  localStorage.setItem('esp', ESP);
+  document.getElementById('espUrl').value = ESP;
+  logln('> equipo: '+ESP);
+  cmd('?').then(refresh);
+}
+
+function aLinea(e){
+  const enc = (e.modo==='ADELANTE'||e.modo==='ATRAS');
+  if(e.modo==='ADELANTE') ultimoSentido='F';
+  if(e.modo==='ATRAS')    ultimoSentido='R';
+  return '[estado] '+(enc?'ON':'OFF')+' | '+(e.bip?'BIP':'UNI')+' | '+
+         (ultimoSentido==='F'?'FWD':'REV')+' vel='+e.vel.toFixed(1)+'% | '+
+         'dead='+e.dt+'ns | PWM='+e.hz;
+}
+
+function traducir(c){
+  const n = parseInt(c.slice(1),10);
+  switch(c[0]){
+    case 'M': return 'm='+(n?'b':'u');
+    case 'F': return 'm=a&v='+(n/10);
+    case 'R': return 'm=r&v='+(n/10);
+    case 'D': return 'd='+n;
+    case 'S': return 'm=s';
+    case 'B': return 'm=f';
+    case 'X': return 'm=s';
+    case 'E': return 'm='+(ultimoSentido==='F'?'a':'r');
+    default : return null;              // '?' -> solo leer
+  }
+}
+
+async function cmd(c){
+  const q = traducir(c);
+  const url = ESP + (q ? '/cmd?'+q : '/estado');
+  try{
+    const r = await fetch(url);
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const t = aLinea(await r.json());
+    if(c!=='?') logln('> '+c+'   '+t);
+    setConn(true);
+    return t;
+  }catch(e){
+    setConn(false);
+    // Un mensaje concreto: "sin conexion" a secas manda a revisar el
+    // circuito cuando el problema suele ser la red del celular.
+    logln('!! no contesta '+ESP+' — conectate a la red PuenteH ('+e.message+')');
+    return '';
+  }
+}
+
+function setConn(ok){
+  const e=document.getElementById('conn');
+  e.textContent = ok?'● conectado':'○ sin conexión';
+  e.style.color = ok?'var(--ok)':'var(--bad)';
+  e.style.borderColor = ok?'var(--ok)':'var(--bad)';
+}
+
+// ---- acciones ----
+function setMode(m){ state.mode=m; cmd('M'+m).then(refresh); }
+function setDir(d){ state.dir=d; sendMotion(); }
+let spTimer=null;
+function onSpeed(v){ state.speed=v/10; document.getElementById('spLbl').textContent=(v/10).toFixed(1)+' %';
+  draw(); clearTimeout(spTimer); spTimer=setTimeout(function(){spTimer=null;sendMotion();},120); }
+function sendMotion(){ cmd((state.dir==='F'?'F':'R')+Math.round(state.speed*10)).then(refresh); }
+let dtTimer=null;
+function onDead(v){ state.dt=+v; document.getElementById('dtLbl').textContent=v+' ns';
+  draw(); clearTimeout(dtTimer); dtTimer=setTimeout(function(){dtTimer=null;cmd('D'+v).then(refresh);},150); }
+
+// ---- parseo del estado que manda el firmware ----
+function parse(t){
+  const m=t.match(/\[estado\]\s+(ON|OFF)\s+\|\s+(UNI|BIP)\s+\|\s+(FWD|REV)\s+vel=([\d.]+)%\s+\|\s+dead=(\d+)ns.*?PWM=(\d+)/);
+  if(!m) return false;
+  state.enabled = m[1]==='ON';
+  state.mode    = m[2]==='BIP'?1:0;
+  state.dir     = m[3]==='FWD'?'F':'R';
+  // Mientras el usuario esta arrastrando un slider su valor manda: el
+  // polleo de 800 ms puede caer entre el movimiento y el envio debounced
+  // y devolver el valor viejo del equipo, haciendo saltar el control para
+  // atras. Solo se acepta lo que dice el equipo cuando no hay envio en
+  // vuelo.
+  if(!spTimer) state.speed = parseFloat(m[4]);
+  if(!dtTimer) state.dt    = parseInt(m[5]);
+  state.pwm     = parseInt(m[6]);
+  return true;
+}
+
+function refresh(){
+  document.getElementById('sEn').textContent   = state.enabled?'ON (habilitadas)':'OFF (coast)';
+  document.getElementById('sEn').style.color    = state.enabled?'var(--ok)':'var(--mut)';
+  document.getElementById('sMode').textContent  = state.mode?'Bipolar':'Unipolar';
+  document.getElementById('sDir').textContent   = state.dir==='F'?'Adelante':'Atrás';
+  document.getElementById('sSpeed').textContent = state.speed.toFixed(1)+' %';
+  document.getElementById('sDead').textContent  = state.dt+' ns';
+  document.getElementById('sPwm').textContent   = (state.pwm/1000)+' kHz';
+  // sincroniza botones/sliders
+  document.getElementById('mUNI').classList.toggle('active',!state.mode);
+  document.getElementById('mBIP').classList.toggle('active', state.mode);
+  document.getElementById('dF').classList.toggle('active',state.dir==='F');
+  document.getElementById('dR').classList.toggle('active',state.dir==='R');
+  // Las perillas tambien: si no, al recargar la pagina el slider marca 0
+  // con el motor girando al 80 %. Se saltea mientras hay un envio en
+  // vuelo, para no pelear con la mano del usuario.
+  if(!spTimer){ document.getElementById('sp').value = Math.round(state.speed*10);
+                document.getElementById('spLbl').textContent = state.speed.toFixed(1)+' %'; }
+  if(!dtTimer){ document.getElementById('dt').value = state.dt;
+                document.getElementById('dtLbl').textContent = state.dt+' ns'; }
+  draw();
+}
+
+// ---- duty de cada rama segun modo/sentido ----
+function duties(){
+  const s=state.speed/100; let dA,dB;
+  if(state.mode===0){ if(state.dir==='F'){dA=s;dB=0;} else {dA=0;dB=s;} }
+  else { const hi=(1+s)/2, lo=(1-s)/2; if(state.dir==='F'){dA=hi;dB=lo;} else {dA=lo;dB=hi;} }
+  return [dA,dB];
+}
+// niveles de gate de una rama en el instante t (1=alto en el pin)
+function leg(d,t,T,DT){
+  if(d<=0.0005) return {p:1,n:1};   // P off (gate alto), N on (gate alto) -> salida a GND
+  if(d>=0.9995) return {p:0,n:0};   // P on, N off -> salida a Vbus
+  const on=d*T;
+  const pOn=(t>=DT && t<on);        // P-MOS conduce [DT, on)
+  const nOn=(t>=on+DT && t<T);      // N-MOS conduce [on+DT, T)
+  return {p:pOn?0:1, n:nOn?1:0};
+}
+
+function draw(){ drawPwm(); drawHist(); }
+
+function drawPwm(){
+  const c=document.getElementById('cPwm'), x=c.getContext('2d'), W=c.width, H=c.height;
+  x.clearRect(0,0,W,H);
+  const T=1e9/state.pwm, DT=state.dt, [dA,dB]=duties();
+  const sigs=[{n:'GPIO 4 HA',c:'--ha',f:t=>leg(dA,t,T,DT).p},
+              {n:'GPIO 5 LA',c:'--la',f:t=>leg(dA,t,T,DT).n},
+              {n:'GPIO 6 HB',c:'--hb',f:t=>leg(dB,t,T,DT).p},
+              {n:'GPIO 7 LB',c:'--lb',f:t=>leg(dB,t,T,DT).n}];
+  const padL=58, padR=12, top=14, rowH=(H-top-14)/4, hi=12, lo=rowH-14;
+  const periods=2, span=T*periods, xo=padL, xw=W-padL-padR;
+  const tx=t=>xo+ (t/span)*xw;
+  const cs=getComputedStyle(document.documentElement);
+  // bandas de dead-time (sombreado) por cada transicion de cada rama
+  function shadeLeg(d){ if(d<=0.0005||d>=0.9995) return [];
+    const out=[]; for(let p=0;p<periods;p++){ const b=p*T;
+      out.push([b,b+DT]); out.push([b+d*T,b+d*T+DT]); } return out; }
+  [dA,dB].forEach((d,gi)=>{ shadeLeg(d).forEach(([a,b])=>{
+    x.fillStyle='rgba(255,255,255,0.05)';
+    const y0=top+ (gi*2)*rowH; x.fillRect(tx(a),y0,tx(b)-tx(a),2*rowH-10); }); });
+  // grilla de periodos
+  x.strokeStyle='rgba(255,255,255,0.08)'; x.lineWidth=1;
+  for(let p=0;p<=periods;p++){ const X=tx(p*T); x.beginPath(); x.moveTo(X,top); x.lineTo(X,H-12); x.stroke(); }
+  // trazas
+  sigs.forEach((s,i)=>{
+    const yTop=top+i*rowH, col=cs.getPropertyValue(s.c).trim();
+    x.fillStyle='#8b949e'; x.font='12px Consolas'; x.fillText(s.n,4,yTop+rowH/2+4);
+    x.strokeStyle=col; x.lineWidth=2; x.beginPath();
+    const N=600; let prev=null;
+    for(let k=0;k<=N;k++){ const t=(k/N)*span; const v=s.f(t%T);
+      const X=tx(t), Y=yTop+ (v? hi : lo);
+      if(prev===null){x.moveTo(X,Y);} else { if(v!==prev){x.lineTo(X, yTop+(prev?hi:lo)); x.lineTo(X,Y);} else x.lineTo(X,Y);} prev=v; }
+    x.stroke();
+  });
+}
+
+function drawHist(){
+  const c=document.getElementById('cHist'), x=c.getContext('2d'), W=c.width, H=c.height;
+  x.clearRect(0,0,W,H);
+  const mid=H/2;
+  x.strokeStyle='rgba(255,255,255,0.12)'; x.beginPath(); x.moveTo(0,mid); x.lineTo(W,mid); x.stroke();
+  x.fillStyle='#8b949e'; x.font='11px Consolas'; x.fillText('+100%',4,12); x.fillText('0',4,mid-3); x.fillText('-100%',4,H-4);
+  if(histo.length<2) return;
+  x.strokeStyle='var(--acc)'; x.strokeStyle=getComputedStyle(document.documentElement).getPropertyValue('--acc').trim();
+  x.lineWidth=2; x.beginPath();
+  const n=histo.length, step=W/Math.max(n-1,1);
+  histo.forEach((v,i)=>{ const X=i*step, Y=mid - (v/100)*(mid-8); i?x.lineTo(X,Y):x.moveTo(X,Y); });
+  x.stroke();
+}
+
+// ---- loop de polleo ----
+async function poll(){
+  const t = await cmd('?');
+  if(parse(t)){
+    refresh();
+    const signed = (state.dir==='F'?1:-1)*(state.enabled?state.speed:0);
+    histo.push(signed); if(histo.length>160) histo.shift();
+    drawHist();
+  }
+}
+document.getElementById('espUrl').value = ESP;
+setInterval(poll, 800);
+poll();
+draw();
+</script>
+</body>
+</html>

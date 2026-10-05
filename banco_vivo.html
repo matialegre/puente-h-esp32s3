@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Banco en vivo</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --bd:#30363d; --tx:#e6edf3; --mu:#8b949e;
+          --ch1:#e8b923; --ch2:#3fb6e8; --ch3:#d45fd4; --ch4:#5fd47a;
+          --claude:#d29922; --pag:#58a6ff; --err:#f85149; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--tx); font:13px/1.4 Consolas, "Cascadia Mono", monospace;
+         height:100vh; display:grid; grid-template-columns:1fr 1fr; gap:1px; background-color:var(--bd); }
+  .lado { background:var(--bg); display:flex; flex-direction:column; min-height:0; padding:10px 12px; gap:8px; }
+  h1 { font-size:14px; margin:0; letter-spacing:.04em; }
+  h1 small { color:var(--mu); font-weight:normal; }
+  .caja { background:var(--panel); border:1px solid var(--bd); border-radius:6px; padding:8px 10px; }
+  .estado { display:grid; grid-template-columns:repeat(3,auto); gap:4px 18px; }
+  .estado b { color:var(--mu); font-weight:normal; }
+  .rama { font-size:15px; }
+  .peligro { color:var(--err); font-weight:bold; }
+  .ok { color:#3fb950; }
+  .botones { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+  button { background:#21262d; color:var(--tx); border:1px solid var(--bd); border-radius:5px; padding:5px 10px;
+           font:inherit; cursor:pointer; }
+  button:hover { border-color:var(--mu); }
+  input[type=range] { width:160px; }
+  input[type=text] { background:#0d1117; color:var(--tx); border:1px solid var(--bd); border-radius:5px;
+                     padding:5px 8px; font:inherit; flex:1; min-width:120px; }
+  .log { flex:1; overflow:auto; min-height:0; }
+  .ent { border-bottom:1px solid #21262d; padding:4px 0; white-space:pre-wrap; word-break:break-word; }
+  .ent .t { color:var(--mu); }
+  .src-claude { color:var(--claude); }
+  .src-pagina { color:var(--pag); }
+  .cmd { color:#fff; font-weight:bold; }
+  .resp { color:#9fb3c8; display:block; padding-left:14px; }
+  canvas { width:100%; height:300px; background:#06090d; border:1px solid var(--bd); border-radius:6px; }
+  .medidas { display:grid; grid-template-columns:auto repeat(5,1fr); gap:2px 10px; }
+  .medidas div:nth-child(-n+6) { color:var(--mu); }
+  .leyenda span { margin-right:14px; }
+</style>
+</head>
+<body>
+
+<section class="lado">
+  <h1>ESP32-S3 · puente H <small>— lo que se manda por serie y lo que contesta</small></h1>
+  <div class="caja estado" id="est">esperando estado…</div>
+  <div class="caja">
+    <div class="botones">
+      <button onclick="esp('s')">LIBRE</button>
+      <button onclick="esp('f')">FRENO</button>
+      <button onclick="esp('a')">ADELANTE</button>
+      <button onclick="esp('r')">ATRÁS</button>
+      <button onclick="esp('b')">bipolar</button>
+      <button onclick="esp('u')">unipolar</button>
+      <button onclick="esp('g')">signo-magnitud</button>
+      <button onclick="esp('p')">leer pines</button>
+    </div>
+    <div class="botones" style="margin-top:6px">
+      velocidad <input type="range" id="vel" min="0" max="100" value="0"
+        onchange="esp('v '+this.value)" oninput="velv.textContent=this.value+' %'">
+      <span id="velv">0 %</span>
+    </div>
+    <div class="botones" style="margin-top:6px">
+      <input type="text" id="cesp" placeholder="comando libre (ej: d 700, h 10000, ?)"
+        onkeydown="if(event.key==='Enter'){esp(this.value);this.value=''}">
+    </div>
+  </div>
+  <div class="caja log" id="logEsp"></div>
+</section>
+
+<section class="lado">
+  <h1>Osciloscopio OWON TAO3104A <small>— comandos SCPI, respuestas y la pantalla</small></h1>
+  <canvas id="cv" width="1400" height="600"></canvas>
+  <div class="caja">
+    <div class="leyenda" id="ley"></div>
+    <div class="medidas" id="med"></div>
+  </div>
+  <div class="caja botones">
+    <input type="text" id="cscope" placeholder="comando SCPI (ej: :CH1:SCALe 2V, :HORIzontal:SCALe 5us)"
+      onkeydown="if(event.key==='Enter'){scope(this.value);this.value=''}">
+    <button onclick="const n=prompt('Nombre de la captura (para el informe):');
+      if(n) get('/api/captura?src=pagina&nombre='+encodeURIComponent(n)).then(tickLog)">guardar captura</button>
+  </div>
+  <div class="caja log" id="logScope"></div>
+</section>
+
+<script>
+const COLOR = {CH1:'#e8b923', CH2:'#3fb6e8', CH3:'#d45fd4', CH4:'#5fd47a'};
+let desde = 0;
+
+const get = u => fetch(u, {cache:'no-store'}).then(r => r.json());
+function esp(c)   { if (c) get('/api/esp?src=pagina&c=' + encodeURIComponent(c)).then(tickLog); }
+function scope(c) { if (c) get('/api/scope?src=pagina&c=' + encodeURIComponent(c)).then(tickLog); }
+
+function esc(s) { return String(s).replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m])); }
+
+async function tickLog() {
+  const nuevas = await get('/api/log?desde=' + desde);
+  for (const e of nuevas) {
+    const div = document.createElement('div');
+    div.className = 'ent';
+    div.innerHTML = `<span class="t">${e.t}</span> <span class="src-${e.src}">[${e.src}]</span> → `
+      + `<span class="cmd">${esc(e.cmd)}</span><span class="resp">${esc(e.resp)}</span>`;
+    const box = document.getElementById(e.dev === 'esp' ? 'logEsp' : 'logScope');
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+    desde = e.n + 1;
+  }
+}
+
+async function tickEstado() {
+  const j = await get('/api/estado');
+  const el = document.getElementById('est');
+  if (j.error) { el.innerHTML = '<span class="peligro">' + esc(j.error) + '</span>'; return; }
+  el.innerHTML = `<div><b>modo</b> ${j.modo}</div><div><b>velocidad</b> ${j.vel} %</div>`
+    + `<div><b>modulación</b> ${j.mod || (j.bip ? 'BIPOLAR' : 'UNIPOLAR')}</div>`
+    + `<div><b>tiempo muerto</b> ${j.dt} ns</div><div><b>frecuencia</b> ${j.hz} Hz</div>`
+    + `<div><b>pines</b> HA LA HB LB = ${j.pines}</div>`;
+}
+
+function medir(v) {
+  let mx = -1e9, mn = 1e9, s = 0;
+  for (const x of v) { if (x > mx) mx = x; if (x < mn) mn = x; s += x; }
+  const avg = s / v.length, umbral = (mx + mn) / 2, hay = mx - mn > 1;
+  let alto = 0, subidas = [];
+  for (let i = 0; i < v.length; i++) {
+    if (v[i] > umbral) alto++;
+    if (i && v[i-1] <= umbral && v[i] > umbral) subidas.push(i);
+  }
+  return {mx, mn, avg, duty: hay ? 100 * alto / v.length : null, subidas};
+}
+
+async function tickWave() {
+  const w = await get('/api/wave');
+  if (w.error) return;
+  const cv = document.getElementById('cv'), g = cv.getContext('2d');
+  const W = cv.width, Hh = cv.height, DX = 14, DY = 10;
+  g.clearRect(0, 0, W, Hh);
+  g.strokeStyle = '#1c2530'; g.lineWidth = 1;
+  for (let i = 0; i <= DX; i++) { g.beginPath(); g.moveTo(i*W/DX, 0); g.lineTo(i*W/DX, Hh); g.stroke(); }
+  for (let i = 0; i <= DY; i++) { g.beginPath(); g.moveTo(0, i*Hh/DY); g.lineTo(W, i*Hh/DY); g.stroke(); }
+  g.strokeStyle = '#2d3a48';
+  g.beginPath(); g.moveTo(0, Hh/2); g.lineTo(W, Hh/2); g.stroke();
+
+  let ley = `base ${w.base}/div · ${w.muestras} muestras &nbsp; `, med =
+    '<div></div><div>prom.</div><div>máx.</div><div>mín.</div><div>duty</div><div>frec.</div>';
+  const tDiv = parseFloat(w.base) * (w.base.includes('us') ? 1e-6 : w.base.includes('ns') ? 1e-9 : w.base.includes('ms') ? 1e-3 : 1);
+  for (const c of w.canales) {
+    const col = COLOR[c.nombre];
+    g.strokeStyle = col; g.lineWidth = 2; g.beginPath();
+    c.divs.forEach((d, i) => {
+      const x = i * W / (c.divs.length - 1), y = Hh/2 - d * Hh / DY;
+      i ? g.lineTo(x, y) : g.moveTo(x, y);
+    });
+    g.stroke();
+    // marca de 0 V del canal
+    const y0 = Hh/2 - c.off_div * Hh / DY;
+    g.fillStyle = col; g.fillRect(0, y0 - 1, 14, 3);
+    const m = medir(c.volts);
+    const per = m.subidas.length > 1 ? (m.subidas[m.subidas.length-1] - m.subidas[0]) / (m.subidas.length-1) : 0;
+    const frec = per ? (1 / (per * tDiv * DX / c.volts.length)) : 0;
+    ley += `<span style="color:${col}">■ ${c.nombre} ${c.escala}/div ${c.probe}</span>`;
+    med += `<div style="color:${col}">${c.nombre}</div><div>${m.avg.toFixed(2)} V</div><div>${m.mx.toFixed(2)} V</div>`
+      + `<div>${m.mn.toFixed(2)} V</div><div>${m.duty === null ? '—' : m.duty.toFixed(1) + ' %'}</div>`
+      + `<div>${frec ? (frec/1000).toFixed(2) + ' kHz' : '—'}</div>`;
+  }
+  document.getElementById('ley').innerHTML = ley;
+  document.getElementById('med').innerHTML = med;
+}
+
+// cada cosa con su ritmo; si una falla, las otras siguen
+setInterval(() => tickLog().catch(() => {}), 500);
+setInterval(() => tickWave().catch(() => {}), 800);
+setInterval(() => tickEstado().catch(() => {}), 2500);
+tickLog(); tickWave(); tickEstado();
+</script>
+</body>
+</html>

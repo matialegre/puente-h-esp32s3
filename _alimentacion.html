@@ -1,0 +1,110 @@
+      <h2>Alimentación: ¿cuántas fuentes necesito?</h2>
+      <p style="font-size:13px;color:var(--mut);margin:0 0 10px">
+        La pregunta corta: <b style="color:#3fb950">si tu motor es de 12&nbsp;V, UNA sola fuente</b>.
+        Los dos rieles del esquemático (<span style="color:#ff9b6b">+Vmot</span> y
+        <span style="color:#d29922">+12&nbsp;V</span>) son "dos" porque pueden ser distintos,
+        no porque tengan que serlo. Si coinciden, se unen y listo. El STM32 se alimenta aparte
+        por el USB — pero su masa <b>tiene que estar unida</b> a la del puente.
+      </p>
+
+      <svg viewBox="0 0 760 400" style="width:100%;background:#0b0e13;border:1px solid #30363d;border-radius:8px">
+        <defs>
+          <marker id="fl" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+            <path d="M0,0 L7,3 L0,6 z" fill="#8b949e"/>
+          </marker>
+        </defs>
+        <style>
+          .t   { font: 11px ui-monospace, Consolas, monospace; fill:#c9d1d9 }
+          .lbl { font: bold 11px 'Archivo Narrow', sans-serif; fill:#8b949e; letter-spacing:.08em }
+          .ttl { font: bold 13px 'Archivo Narrow', sans-serif; fill:#e6edf3; letter-spacing:.1em }
+          .pos { stroke:#ff7b72; stroke-width:2.5; fill:none }
+          .gnd { stroke:#8b949e; stroke-width:2.5; fill:none }
+          .gat { stroke:#d29922; stroke-width:2.5; fill:none }
+          .caja{ fill:#161b22; stroke:#30363d; stroke-width:1.5 }
+          .nota{ font: 10.5px 'Archivo', sans-serif; fill:#8b949e }
+        </style>
+
+        <!-- ══ CASO A: motor de 12 V ══════════════════════════════ -->
+        <text class="ttl" x="20" y="26">CASO A · MOTOR DE 12 V  →  UNA SOLA FUENTE</text>
+        <text class="nota" x="20" y="44">Es el caso normal para probar en el banco.</text>
+
+        <!-- fuente -->
+        <rect class="caja" x="20" y="60" width="120" height="66" rx="4"/>
+        <text class="lbl" x="34" y="82">FUENTE ÚNICA</text>
+        <text class="t"   x="34" y="100" style="fill:#e6edf3">12 V  ·  3 A</text>
+        <text class="t"   x="34" y="117" style="fill:#ff7b72">+</text>
+        <text class="t"   x="52" y="117" style="fill:#8b949e">−</text>
+
+        <!-- riel + -->
+        <path class="pos" d="M140,92 L250,92"/>
+        <circle cx="250" cy="92" r="3.5" fill="#ff7b72"/>
+        <!-- bifurcacion -->
+        <path class="pos" d="M250,92 L250,72 L400,72" marker-end="url(#fl)"/>
+        <path class="gat" d="M250,92 L250,122 L400,122" marker-end="url(#fl)"/>
+        <text class="t" x="408" y="76"  style="fill:#ff9b6b">+Vmot → source de los P (arriba)</text>
+        <text class="t" x="408" y="126" style="fill:#d29922">riel de gates → los 2k2 del lado N</text>
+
+        <!-- riel gnd -->
+        <path class="gnd" d="M140,114 L250,114 L250,170 L680,170"/>
+        <text class="lbl" x="300" y="163">MASA COMÚN — OBLIGATORIA</text>
+
+        <!-- stm32 -->
+        <rect class="caja" x="20" y="196" width="120" height="60" rx="4"/>
+        <text class="lbl" x="34" y="216">STM32 + ST-LINK</text>
+        <text class="t"   x="34" y="234" style="fill:#7ce8ff">USB de la PC</text>
+        <text class="t"   x="34" y="249" style="fill:#8b949e">GND</text>
+        <path class="gnd" d="M140,246 L200,246 L200,170"/>
+        <circle cx="200" cy="170" r="3.5" fill="#8b949e"/>
+
+        <text class="nota" x="230" y="212">El STM32 NO alimenta el puente: solo manda las 4 señales</text>
+        <text class="nota" x="230" y="228">de 3,3 V a los 2N2222. La potencia sale toda de la fuente.</text>
+        <text class="nota" x="230" y="252" style="fill:#ff7b72">Si las masas no se unen, los 2N2222 no tienen referencia</text>
+        <text class="nota" x="230" y="268" style="fill:#ff7b72">y el puente no responde. Es el error más común.</text>
+
+        <!-- separador -->
+        <line x1="20" y1="292" x2="740" y2="292" stroke="#30363d" stroke-width="1"/>
+
+        <!-- ══ CASO B: motor distinto ═════════════════════════════ -->
+        <text class="ttl" x="20" y="318">CASO B · MOTOR QUE NO ES DE 12 V  →  DOS FUENTES</text>
+
+        <rect class="caja" x="20" y="332" width="104" height="46" rx="4"/>
+        <text class="lbl" x="32" y="350">FUENTE MOTOR</text>
+        <text class="t"   x="32" y="368" style="fill:#ff9b6b">Vmot ≤ 20 V</text>
+
+        <rect class="caja" x="150" y="332" width="104" height="46" rx="4"/>
+        <text class="lbl" x="162" y="350">FUENTE GATES</text>
+        <text class="t"   x="162" y="368" style="fill:#d29922">12 V · 100 mA</text>
+
+        <path class="gnd" d="M124,372 L138,372 L138,388 L470,388"/>
+        <path class="gnd" d="M254,372 L268,372 L268,388"/>
+        <text class="lbl" x="290" y="382">LAS DOS MASAS UNIDAS ENTRE SÍ Y CON EL STM32</text>
+
+        <text class="nota" x="480" y="344" style="fill:#ff7b72">El límite de 20 V no es un consejo:</text>
+        <text class="nota" x="480" y="359">al encender el P, su Vgs queda en −Vmot,</text>
+        <text class="nota" x="480" y="374">y el IRF9530N aguanta ±20 V de Vgs.</text>
+      </svg>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:12px">
+        <div style="background:#161b22;border:1px solid #30363d;border-left:3px solid #3fb950;padding:10px 12px;border-radius:4px">
+          <div style="font:bold 11px 'Archivo Narrow',sans-serif;letter-spacing:.1em;color:#3fb950;text-transform:uppercase;margin-bottom:5px">Para arrancar hoy</div>
+          <div style="font-size:12.5px;color:#8b949e">Una fuente de <b style="color:#c9d1d9">12&nbsp;V</b> y un motor de 12&nbsp;V.
+            Unís <span style="color:#ff9b6b">+Vmot</span> y <span style="color:#d29922">riel de gates</span> al mismo positivo.</div>
+        </div>
+        <div style="background:#161b22;border:1px solid #30363d;border-left:3px solid #d29922;padding:10px 12px;border-radius:4px">
+          <div style="font:bold 11px 'Archivo Narrow',sans-serif;letter-spacing:.1em;color:#d29922;text-transform:uppercase;margin-bottom:5px">Cuánta corriente</div>
+          <div style="font-size:12.5px;color:#8b949e">La del motor más un pelo. Los gates consumen
+            <b style="color:#c9d1d9">casi nada</b>: son 4 resistencias de 2k2, unos 20&nbsp;mA en total.</div>
+        </div>
+        <div style="background:#161b22;border:1px solid #30363d;border-left:3px solid #ff7b72;padding:10px 12px;border-radius:4px">
+          <div style="font:bold 11px 'Archivo Narrow',sans-serif;letter-spacing:.1em;color:#ff7b72;text-transform:uppercase;margin-bottom:5px">Lo que no se negocia</div>
+          <div style="font-size:12.5px;color:#8b949e">Masa común entre fuente, puente y STM32, y
+            <b style="color:#c9d1d9">Vmot ≤ 20&nbsp;V</b>. Sin lo primero no anda; sin lo segundo se quema el P.</div>
+        </div>
+      </div>
+
+      <p style="font-size:12.5px;color:#8b949e;margin:14px 0 0;padding:10px 12px;background:rgba(210,153,34,.08);border-left:3px solid #d29922">
+        <b style="color:#d29922">Primer encendido, en este orden:</b> sin motor conectado y con la fuente
+        en <b style="color:#c9d1d9">5–6&nbsp;V</b>. Verificás en el osciloscopio las señales de gate y el
+        dead-time. Recién cuando eso está bien, subís a 12&nbsp;V y conectás el motor.
+      </p>
+
